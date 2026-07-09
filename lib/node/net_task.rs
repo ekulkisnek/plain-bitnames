@@ -273,8 +273,8 @@ fn is_fatal_reorg_error(err: &Error) -> bool {
     !matches!(err, Error::State(_))
 }
 
-fn reorg_to_tip(
-    env: &sneed::Env<heed::WithoutTls>,
+fn reorg_to_tip<ThreadLocalStorage>(
+    env: &sneed::Env<ThreadLocalStorage>,
     archive: &Archive,
     mempool: &MemPool,
     state: &State,

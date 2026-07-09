@@ -163,10 +163,7 @@ pub struct Archive {
 impl Archive {
     pub const NUM_DBS: u32 = 14;
 
-    pub fn new<Tls>(env: &sneed::Env<Tls>) -> Result<Self, Error>
-    where
-        Tls: heed::TlsUsage,
-    {
+    pub fn new<Tls>(env: &sneed::Env<Tls>) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
         let version =
             DatabaseUnique::create(env, &mut rwtxn, "archive_version")?;
