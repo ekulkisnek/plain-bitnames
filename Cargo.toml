@@ -126,8 +126,8 @@ git = "https://gitlab.com/A-Manning/leonhard-llc-ops.git"
 branch = "temp-dir-leak"
 
 [patch.crates-io.wayland-scanner]
-git = "https://github.com/Smithay/wayland-rs"
-rev = "d07c4f91f28b42e5a485823ffd9d8d5a210b1053"
+git = "https://github.com/ekulkisnek/wayland-rs"
+rev = "458526f9ce7bff58aada8f976a2b5074d8c7387f"
 
 # Have to use a patch here. Depending directly on the fork breaks macros.
 [patch.crates-io.tracing-appender]
