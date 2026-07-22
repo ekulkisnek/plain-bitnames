@@ -127,7 +127,7 @@ branch = "temp-dir-leak"
 
 [patch.crates-io.wayland-scanner]
 git = "https://github.com/ekulkisnek/wayland-rs"
-rev = "458526f9ce7bff58aada8f976a2b5074d8c7387f"
+rev = "cf851c354d6756c9185d950a2c114c5e391f8e0d"
 
 # Have to use a patch here. Depending directly on the fork breaks macros.
 [patch.crates-io.tracing-appender]
