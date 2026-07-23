@@ -91,13 +91,13 @@ impl Inbox {
     ) {
         egui::Panel::left("Inbox")
             //.exact_width(250.)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let () = self
                     .show_inbox(app, settings, ui)
                     .unwrap_or_else(|err| Self::show_error(ui, &err));
             });
         if let Some(selected) = &self.selected {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let () = Self::show_selected(ui, selected);
             });
         }

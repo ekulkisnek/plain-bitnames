@@ -14,7 +14,6 @@ blake3 = { workspace = true }
 borsh = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 dirs = { workspace = true }
-eframe = { workspace = true }
 either = { workspace = true }
 fallible-iterator = { workspace = true }
 futures = { workspace = true }
@@ -47,6 +46,10 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 url = { workspace = true }
 utoipa = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+
+[dependencies.eframe]
+workspace = true
+features = ["glow", "wayland", "web_screen_reader", "x11"]
 
 [dependencies.libes]
 workspace = true
