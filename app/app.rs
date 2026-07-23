@@ -86,8 +86,8 @@ fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
         .into_iter()
         .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint))
         .collect();
-    wallet.put_utxos(&utxos)?;
     wallet.spend_utxos(&spent)?;
+    wallet.replace_utxos(&utxos)?;
     tracing::debug!("finished wallet update");
     Ok(())
 }
@@ -258,6 +258,7 @@ impl App {
             #[cfg(feature = "zmq")]
             config.zmq_addr,
         ))?;
+        update_wallet(&node, &wallet)?;
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
             let transactions = node.get_all_transactions()?;

@@ -876,6 +876,24 @@ impl Wallet {
         Ok(())
     }
 
+    /// Replace the wallet's unspent set with the authoritative node view.
+    ///
+    /// Unlike `put_utxos`, this removes outputs that disappeared during a
+    /// reorg instead of leaving them available for coin selection.
+    pub fn replace_utxos(
+        &self,
+        utxos: &HashMap<OutPoint, FilledOutput>,
+    ) -> Result<(), Error> {
+        let mut rwtxn = self.env.write_txn()?;
+        self.utxos.clear(&mut rwtxn)?;
+        for (outpoint, output) in utxos {
+            self.utxos
+                .put(&mut rwtxn, &OutPointKey::from(outpoint), output)?;
+        }
+        rwtxn.commit()?;
+        Ok(())
+    }
+
     pub fn get_balance(&self) -> Result<Balance, Error> {
         let mut balance = Balance::default();
         let rotxn = self.env.read_txn()?;
@@ -1239,6 +1257,39 @@ mod test {
                 if matches!(updates.paymail_fee_sats, Update::Set(2_000))
         ));
 
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn replace_utxos_removes_reorged_outputs() -> anyhow::Result<()> {
+        let test_dir = test_wallet_dir("replace_utxos")?;
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[9u8; 64])?;
+        let address = wallet.get_new_address()?;
+        let stale = OutPoint::Regular {
+            txid: Txid([10u8; 32]),
+            vout: 0,
+        };
+        let current = OutPoint::Regular {
+            txid: Txid([11u8; 32]),
+            vout: 0,
+        };
+        wallet.put_utxos(&HashMap::from([(
+            stale,
+            FilledOutput::new_bitcoin_value(address, Amount::from_sat(100)),
+        )]))?;
+        wallet.replace_utxos(&HashMap::from([(
+            current,
+            FilledOutput::new_bitcoin_value(address, Amount::from_sat(200)),
+        )]))?;
+        let utxos = wallet.get_utxos()?;
+        assert!(!utxos.contains_key(&stale));
+        assert_eq!(
+            utxos.get(&current).unwrap().get_value(),
+            Amount::from_sat(200)
+        );
+        drop(wallet);
         let _unused = std::fs::remove_dir_all(&test_dir);
         Ok(())
     }
