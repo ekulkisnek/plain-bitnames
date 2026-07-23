@@ -89,6 +89,57 @@ impl RpcServer for RpcServerImpl {
         .unwrap()
     }
 
+    async fn create_transfer(
+        &self,
+        dest: Address,
+        value_sats: u64,
+        fee_sats: u64,
+        memo: Option<String>,
+    ) -> RpcResult<Txid> {
+        let memo = match memo {
+            None => None,
+            Some(memo) => {
+                let hex = hex::decode(memo).map_err(custom_err)?;
+                Some(hex)
+            }
+        };
+        let tx = self
+            .app
+            .wallet
+            .create_transfer(
+                dest,
+                Amount::from_sat(value_sats),
+                Amount::from_sat(fee_sats),
+                memo,
+            )
+            .map_err(custom_err)?;
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
+    async fn create_withdrawal(
+        &self,
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        amount_sats: u64,
+        fee_sats: u64,
+        mainchain_fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        let tx = self
+            .app
+            .wallet
+            .create_withdrawal(
+                mainchain_address,
+                Amount::from_sat(amount_sats),
+                Amount::from_sat(mainchain_fee_sats),
+                Amount::from_sat(fee_sats),
+            )
+            .map_err(custom_err)?;
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
     async fn decrypt_msg(
         &self,
         encryption_pubkey: EncryptionPubKey,
@@ -420,37 +471,35 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
-    async fn stop(&self) {
-        std::process::exit(0);
+    async fn sign_transaction(
+        &self,
+        transaction: plain_bitnames::types::Transaction,
+        broadcast: Option<bool>,
+    ) -> RpcResult<plain_bitnames::types::AuthorizedTransaction> {
+        let authorized =
+            self.app.wallet.authorize(transaction).map_err(custom_err)?;
+        if let Some(true) = broadcast {
+            let () = self
+                .app
+                .submit_transaction(&authorized)
+                .map_err(custom_err)?;
+        }
+        Ok(authorized)
     }
 
-    async fn transfer(
+    async fn submit_transaction(
         &self,
-        dest: Address,
-        value_sats: u64,
-        fee_sats: u64,
-        memo: Option<String>,
+        transaction: plain_bitnames::types::AuthorizedTransaction,
     ) -> RpcResult<Txid> {
-        let memo = match memo {
-            None => None,
-            Some(memo) => {
-                let hex = hex::decode(memo).map_err(custom_err)?;
-                Some(hex)
-            }
-        };
-        let tx = self
+        let () = self
             .app
-            .wallet
-            .create_transfer(
-                dest,
-                Amount::from_sat(value_sats),
-                Amount::from_sat(fee_sats),
-                memo,
-            )
+            .submit_transaction(&transaction)
             .map_err(custom_err)?;
-        let txid = tx.txid();
-        self.app.sign_and_send(tx).map_err(custom_err)?;
-        Ok(txid)
+        Ok(transaction.transaction.txid())
+    }
+
+    async fn stop(&self) {
+        std::process::exit(0);
     }
 
     async fn verify_signature(
@@ -467,28 +516,6 @@ impl RpcServer for RpcServerImpl {
             msg.as_bytes(),
         );
         Ok(res)
-    }
-
-    async fn withdraw(
-        &self,
-        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-        amount_sats: u64,
-        fee_sats: u64,
-        mainchain_fee_sats: u64,
-    ) -> RpcResult<Txid> {
-        let tx = self
-            .app
-            .wallet
-            .create_withdrawal(
-                mainchain_address,
-                Amount::from_sat(amount_sats),
-                Amount::from_sat(mainchain_fee_sats),
-                Amount::from_sat(fee_sats),
-            )
-            .map_err(custom_err)?;
-        let txid = tx.txid();
-        self.app.sign_and_send(tx).map_err(custom_err)?;
-        Ok(txid)
     }
 }
 

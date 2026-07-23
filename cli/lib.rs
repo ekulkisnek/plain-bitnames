@@ -1,4 +1,5 @@
 use std::{
+    marker::PhantomData,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::LazyLock,
     time::Duration,
@@ -18,6 +19,20 @@ use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::Url;
 
+struct JsonParser<T>(PhantomData<T>);
+
+impl<T> JsonParser<T> {
+    fn parse(
+        s: &str,
+    ) -> Result<T, serde_path_to_error::Error<serde_json::Error>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut deserializer = serde_json::Deserializer::from_str(s);
+        serde_path_to_error::deserialize(&mut deserializer)
+    }
+}
+
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
 pub enum Command {
@@ -36,6 +51,25 @@ pub enum Command {
         value_sats: u64,
         #[arg(long)]
         fee_sats: u64,
+    },
+    /// Create a tx that transfers funds to the specified address
+    CreateTransfer {
+        dest: Address,
+        #[arg(long)]
+        value_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+    },
+    /// Creates a tx that initiates a withdrawal to the specified mainchain
+    /// address
+    CreateWithdrawal {
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        #[arg(long)]
+        amount_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+        #[arg(long)]
+        mainchain_fee_sats: u64,
     },
     /// Decrypt a message with the specified encryption key corresponding to
     /// the specified encryption pubkey
@@ -144,16 +178,23 @@ pub enum Command {
         #[arg(long)]
         msg: String,
     },
+    /// Sign a transaction, and optionally broadcast it.
+    SignTransaction {
+        #[arg(value_parser = JsonParser::<plain_bitnames::types::Transaction>::parse)]
+        transaction: plain_bitnames::types::Transaction,
+        #[arg(default_value_t = false)]
+        broadcast: bool,
+    },
+    /// Verify and broadcast a transaction
+    SubmitTransaction {
+        #[arg(
+            value_parser =
+                JsonParser::<plain_bitnames::types::AuthorizedTransaction>::parse
+        )]
+        transaction: plain_bitnames::types::AuthorizedTransaction,
+    },
     /// Stop the node
     Stop,
-    /// Transfer funds to the specified address
-    Transfer {
-        dest: Address,
-        #[arg(long)]
-        value_sats: u64,
-        #[arg(long)]
-        fee_sats: u64,
-    },
     /// Verify a signature on a message against the specified verifying key.
     /// Returns `true` if the signature is valid
     VerifySignature {
@@ -165,16 +206,6 @@ pub enum Command {
         dst: Dst,
         #[arg(long)]
         msg: String,
-    },
-    /// Initiate a withdrawal to the specified mainchain address
-    Withdraw {
-        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-        #[arg(long)]
-        amount_sats: u64,
-        #[arg(long)]
-        fee_sats: u64,
-        #[arg(long)]
-        mainchain_fee_sats: u64,
     },
 }
 
@@ -285,6 +316,32 @@ where
         } => {
             let txid = rpc_client
                 .create_deposit(address, value_sats, fee_sats)
+                .await?;
+            format!("{txid}")
+        }
+        Command::CreateTransfer {
+            dest,
+            value_sats,
+            fee_sats,
+        } => {
+            let txid = rpc_client
+                .create_transfer(dest, value_sats, fee_sats, None)
+                .await?;
+            format!("{txid}")
+        }
+        Command::CreateWithdrawal {
+            mainchain_address,
+            amount_sats,
+            fee_sats,
+            mainchain_fee_sats,
+        } => {
+            let txid = rpc_client
+                .create_withdrawal(
+                    mainchain_address,
+                    amount_sats,
+                    fee_sats,
+                    mainchain_fee_sats,
+                )
                 .await?;
             format!("{txid}")
         }
@@ -440,19 +497,22 @@ where
                 rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
             serde_json::to_string_pretty(&authorization)?
         }
+        Command::SignTransaction {
+            transaction,
+            broadcast,
+        } => {
+            let authorized = rpc_client
+                .sign_transaction(transaction, Some(broadcast))
+                .await?;
+            serde_json::to_string_pretty(&authorized)?
+        }
+        Command::SubmitTransaction { transaction } => {
+            let txid = rpc_client.submit_transaction(transaction).await?;
+            format!("{txid}")
+        }
         Command::Stop => {
             let () = rpc_client.stop().await?;
             String::default()
-        }
-        Command::Transfer {
-            dest,
-            value_sats,
-            fee_sats,
-        } => {
-            let txid = rpc_client
-                .transfer(dest, value_sats, fee_sats, None)
-                .await?;
-            format!("{txid}")
         }
         Command::VerifySignature {
             signature,
@@ -464,22 +524,6 @@ where
                 .verify_signature(signature, verifying_key, dst, msg)
                 .await?;
             format!("{res}")
-        }
-        Command::Withdraw {
-            mainchain_address,
-            amount_sats,
-            fee_sats,
-            mainchain_fee_sats,
-        } => {
-            let txid = rpc_client
-                .withdraw(
-                    mainchain_address,
-                    amount_sats,
-                    fee_sats,
-                    mainchain_fee_sats,
-                )
-                .await?;
-            format!("{txid}")
         }
     })
 }
