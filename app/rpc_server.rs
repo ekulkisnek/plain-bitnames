@@ -99,7 +99,7 @@ impl RpcServer for RpcServerImpl {
         let memo = match memo {
             None => None,
             Some(memo) => {
-                let hex = hex::decode(memo).map_err(custom_err)?;
+                let hex = const_hex::decode(memo).map_err(custom_err)?;
                 Some(hex)
             }
         };
@@ -145,11 +145,11 @@ impl RpcServer for RpcServerImpl {
         encryption_pubkey: EncryptionPubKey,
         msg: String,
     ) -> RpcResult<String> {
-        let ciphertext = hex::decode(msg).map_err(custom_err)?;
+        let ciphertext = const_hex::decode(msg).map_err(custom_err)?;
         self.app
             .wallet
             .decrypt_msg(&encryption_pubkey, &ciphertext)
-            .map(hex::encode)
+            .map(const_hex::encode)
             .map_err(custom_err)
     }
 
@@ -160,7 +160,7 @@ impl RpcServer for RpcServerImpl {
     ) -> RpcResult<String> {
         Ecies::new(encryption_pubkey.0)
             .encrypt(msg.as_bytes())
-            .map(hex::encode)
+            .map(const_hex::encode)
             .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
     }
 

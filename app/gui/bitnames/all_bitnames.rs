@@ -3,8 +3,8 @@ use std::{
     str::FromStr,
 };
 
+use const_hex::FromHex;
 use eframe::egui;
-use hex::FromHex;
 use plain_bitnames::types::{
     BitNameData, BitNameSeqId, MutableBitNameData, hashes::BitName,
 };
@@ -35,7 +35,7 @@ fn show_bitname_data(
         signing_pubkey,
         paymail_fee_sats,
     } = mutable_data;
-    let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
+    let commitment = commitment.map_or("Not set".to_owned(), const_hex::encode);
     let socket_addr_v4 = socket_addr_v4
         .map_or("Not set".to_owned(), |socket_addr_v4| {
             socket_addr_v4.to_string()
@@ -106,7 +106,7 @@ fn show_bitname_with_data(
     ui.horizontal(|ui| {
         ui.monospace_selectable_singleline(
             true,
-            format!("BitName ID: {}", hex::encode(bitname_id.0)),
+            format!("BitName ID: {}", const_hex::encode(bitname_id.0)),
         )
     })
     .join()

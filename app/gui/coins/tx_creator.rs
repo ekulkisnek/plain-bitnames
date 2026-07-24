@@ -4,8 +4,8 @@ use std::{
     str::FromStr,
 };
 
+use const_hex::FromHex;
 use eframe::egui::{self, Response};
-use hex::FromHex;
 
 use plain_bitnames::types::{
     EncryptionPubKey, Hash, MutableBitNameData, Transaction, Txid, VerifyingKey,
@@ -217,7 +217,7 @@ impl TxCreator {
                     Default::default(),
                     &mut bitname_data.commitment,
                     Hash::from_hex,
-                    |commitment| hex::encode(commitment),
+                    |commitment| const_hex::encode(commitment),
                 )
         });
         let ipv4_resp = ui.horizontal(|ui| {

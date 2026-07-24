@@ -8,11 +8,11 @@ bitcoin = { workspace = true, features = ["serde"] }
 blake3 = { workspace = true }
 borsh = { workspace = true, features = ["derive"] }
 clap = { workspace = true, features = ["derive"], optional = true }
+const-hex = { workspace = true, features = ["serde"] }
 ed25519-bip32 = { workspace = true }
 educe = { workspace = true, features = ["Clone", "Debug"] }
 generic-array = { workspace = true }
 heed = { workspace = true, optional = true }
-hex = { workspace = true, features = ["serde"] }
 hex-literal = { workspace = true }
 libes = { workspace = true }
 merkle-cbt = { workspace = true }

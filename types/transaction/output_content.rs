@@ -445,7 +445,7 @@ mod filled {
             serde(rename = "BitcoinSats")
         ],
         bitname_reservation_commitment_attrs: [
-            serde(with = "hex::serde")
+            serde(with = "const_hex::serde")
         ]
     );
 

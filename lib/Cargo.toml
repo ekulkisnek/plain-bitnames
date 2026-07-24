@@ -24,6 +24,7 @@ borsh = { workspace = true, features = ["derive"] }
 byteorder = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"], optional = true }
+const-hex = { workspace = true, features = ["serde"] }
 ed25519-bip32 = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["hazmat"]}
 educe = { workspace = true, features = ["Clone", "Debug"] }
@@ -33,7 +34,6 @@ futures = { workspace = true, features = ["alloc"] }
 governor = { workspace = true, features = ["quanta", "std"] }
 hashlink = { workspace = true, features = ["serde_impl"] }
 heed = { workspace = true }
-hex = { workspace = true, features = ["serde"] }
 jsonrpsee = { workspace = true }
 nonempty = { workspace = true, features = ["serialize"] }
 parking_lot = { workspace = true }

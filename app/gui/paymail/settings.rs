@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
+use const_hex::FromHex;
 use eframe::egui;
-use hex::FromHex;
 use plain_bitnames::types::{Hash, hashes::BitName};
 
 #[derive(Debug, Default)]
@@ -47,7 +47,7 @@ impl Settings {
         }
         egui::Grid::new("bitname inboxes").show(ui, |ui| {
             self.bitname_inboxes.retain(|bitname| {
-                ui.monospace(hex::encode(bitname.0));
+                ui.monospace(const_hex::encode(bitname.0));
                 let button = ui.button("Remove");
                 ui.end_row();
                 !button.clicked()

@@ -121,8 +121,8 @@ pub mod base58ck_decode {
         Decode(#[from] bitcoin::base58::Error),
         #[error(
             "Incorrect prefix (`{}`): expected `{}`.",
-            hex::encode(.decoded),
-            hex::encode(.expected),
+            const_hex::encode(.decoded),
+            const_hex::encode(.expected),
         )]
         IncorrectPrefix {
             decoded: GenericArray<u8, PrefixLen>,
@@ -173,7 +173,7 @@ pub struct WrongHrp {
 pub enum Bech32mDecode {
     #[error(transparent)]
     Bech32m(#[from] bech32::DecodeError),
-    #[error("Invalid bytes: {}", hex::encode(.bytes))]
+    #[error("Invalid bytes (`{}`)", const_hex::encode(.bytes))]
     InvalidBytes {
         bytes: [u8; 32],
         source: Box<ed25519_dalek::SignatureError>,
