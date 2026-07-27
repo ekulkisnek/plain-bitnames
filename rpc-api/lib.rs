@@ -1,6 +1,9 @@
 //! RPC API
 
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
@@ -200,6 +203,13 @@ pub trait Rpc {
     #[method(name = "get_paymail")]
     async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
 
+    /// Get stxos for addresses
+    #[method(name = "get_stxos")]
+    async fn get_stxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<SpentOutput>>>;
+
     /// Get transaction by txid
     #[method(name = "get_transaction")]
     async fn get_transaction(
@@ -213,6 +223,13 @@ pub trait Rpc {
         &self,
         txid: Txid,
     ) -> RpcResult<Option<TxInfo>>;
+
+    /// Get utxos for addresses
+    #[method(name = "get_utxos")]
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
 
     /// Get wallet addresses, sorted by base58 encoding
     #[method(name = "get_wallet_addresses")]

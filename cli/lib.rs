@@ -103,6 +103,8 @@ pub enum Command {
     GetBestSidechainBlockHash,
     /// Get block data
     GetBlock { block_hash: BlockHash },
+    /// Get the current block count
+    GetBlockcount,
     /// Get mainchain blocks that commit to a specified block hash
     GetBmmInclusions {
         block_hash: plain_bitnames::types::BlockHash,
@@ -113,10 +115,18 @@ pub enum Command {
     GetNewEncryptionKey,
     /// Get a new verifying key
     GetNewVerifyingKey,
-    /// Get the current block count
-    GetBlockcount,
     /// Get all paymail
     GetPaymail,
+    /// Get stxos for addresses
+    GetStxos {
+        #[arg(required = true)]
+        addresses: Vec<Address>,
+    },
+    /// Get utxos for addresses
+    GetUtxos {
+        #[arg(required = true)]
+        addresses: Vec<Address>,
+    },
     /// Get wallet addresses, sorted by base58 encoding
     GetWalletAddresses,
     /// Get wallet master XEncryptionSecretKey
@@ -407,6 +417,16 @@ where
         Command::GetPaymail => {
             let paymail = rpc_client.get_paymail().await?;
             serde_json::to_string_pretty(&paymail)?
+        }
+        Command::GetStxos { addresses } => {
+            let addresses = addresses.into_iter().collect();
+            let stxos = rpc_client.get_stxos(addresses).await?;
+            serde_json::to_string_pretty(&stxos)?
+        }
+        Command::GetUtxos { addresses } => {
+            let addresses = addresses.into_iter().collect();
+            let utxos = rpc_client.get_utxos(addresses).await?;
+            serde_json::to_string_pretty(&utxos)?
         }
         Command::GetWalletAddresses => {
             let addresses = rpc_client.get_wallet_addresses().await?;

@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use bitcoin::Amount;
 use jsonrpsee::{
@@ -245,6 +249,21 @@ impl RpcServer for RpcServerImpl {
         self.app.get_paymail(None).map_err(custom_err)
     }
 
+    async fn get_stxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
+        let res = self
+            .app
+            .node
+            .get_stxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
+    }
+
     async fn get_transaction(
         &self,
         txid: Txid,
@@ -289,6 +308,21 @@ impl RpcServer for RpcServerImpl {
             txin,
         };
         Ok(Some(res))
+    }
+
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {
+        let res = self
+            .app
+            .node
+            .get_utxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
     }
 
     async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {
