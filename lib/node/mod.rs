@@ -66,11 +66,12 @@ where
     pub async fn new(
         bind_addr: SocketAddr,
         datadir: &Path,
-        network: Network,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
         cusf_mainchain_wallet: Option<
             mainchain::WalletClient<MainchainTransport>,
         >,
+        magic_bytes_override: Option<crate::net::peer_message::MagicBytes>,
+        network: Network,
         runtime: &tokio::runtime::Runtime,
         #[cfg(feature = "zmq")] zmq_addr: SocketAddr,
     ) -> Result<Self, Error>
@@ -129,8 +130,14 @@ where
                 archive.clone(),
                 cusf_mainchain.clone(),
             );
-        let (net, peer_info_rx) =
-            Net::new(&env, archive.clone(), network, state.clone(), bind_addr)?;
+        let (net, peer_info_rx) = Net::new(
+            &env,
+            archive.clone(),
+            magic_bytes_override,
+            network,
+            state.clone(),
+            bind_addr,
+        )?;
         let cusf_mainchain_wallet =
             cusf_mainchain_wallet.map(|wallet| Arc::new(Mutex::new(wallet)));
         let net_task = NetTaskHandle::new(
