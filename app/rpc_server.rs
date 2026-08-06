@@ -123,6 +123,25 @@ impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
         self.app.node.bitnames().map_err(custom_err)
     }
 
+    async fn connect_block(
+        &self,
+        block: Block,
+        main_block_hash: bitcoin::BlockHash,
+    ) -> RpcResult<bool> {
+        self.app
+            .local_pool
+            .spawn_pinned({
+                let app = self.app.clone();
+                move || async move {
+                    app.connect_block(block, main_block_hash)
+                        .await
+                        .map_err(custom_err)
+                }
+            })
+            .await
+            .unwrap()
+    }
+
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
         let block = self
             .app
@@ -426,6 +445,31 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
             bip39::Language::English,
         );
         Ok(mnemonic.to_string())
+    }
+
+    async fn get_block_template(
+        &self,
+    ) -> RpcResult<rpc_api::wallet::GetBlockTemplateResponse> {
+        let template = self
+            .app
+            .local_pool
+            .spawn_pinned({
+                let app = self.app.clone();
+                move || async move {
+                    app.get_block_template().await.map_err(custom_err)
+                }
+            })
+            .await
+            .unwrap()?;
+        Ok(rpc_api::wallet::GetBlockTemplateResponse {
+            critical_hash: template.header.hash(),
+            block: Block {
+                header: template.header,
+                height: template.height,
+                body: template.body,
+            },
+            fees_sats: template.fees.to_sat(),
+        })
     }
 
     async fn get_new_address(&self) -> RpcResult<Address> {

@@ -108,6 +108,20 @@ pub mod node {
         #[method(name = "bitnames")]
         async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
 
+        /// Connect a block template for which a BMM request was included in the
+        /// specified mainchain block. Returns `true` if it was accepted as the new
+        /// tip.
+        #[open_api_method(output_schema(ToSchema))]
+        #[method(name = "connect_block")]
+        async fn connect_block(
+            &self,
+            block: Block,
+            #[open_api_method_arg(schema(
+                PartialSchema = "bitnames_schema::BitcoinBlockHash"
+            ))]
+            main_block_hash: bitcoin::BlockHash,
+        ) -> RpcResult<bool>;
+
         /// Get block data
         #[open_api_method(output_schema(ToSchema))]
         #[method(name = "get_block")]
@@ -232,26 +246,40 @@ pub mod wallet {
     use l2l_openapi::open_api;
     use plain_bitnames_types::{
         Address, Authorization, Authorized, BatchIcannRegistrationData,
-        BitNameDataUpdates, BitcoinOutputContent, EncryptionPubKey,
-        FilledOutput, FilledOutputContent, MerkleRoot, MutableBitNameData,
-        OutPoint, OutputContent, PointedOutput, Transaction, TransactionData,
-        Txid, VerifyingKey, WithdrawalOutputContent, XEncryptionSecretKey,
-        XVerifyingKey,
+        BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash, Body,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
+        MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
+        PointedOutput, Transaction, TransactionData, Txid, VerifyingKey,
+        WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
         authorization::{Dst, Signature},
         hashes::BitName,
         schema as bitnames_schema,
         wallet::Balance,
     };
+    use serde::{Deserialize, Serialize};
+    use utoipa::ToSchema;
 
     use crate::{open_api, schema};
 
+    #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+    pub struct GetBlockTemplateResponse {
+        /// Block hash to commit to in a BMM request
+        pub critical_hash: BlockHash,
+        /// Block to pass to `connect_block` once its BMM request is included in a
+        /// mainchain block
+        pub block: Block,
+        /// Fees collected by the transactions in the block, in sats
+        pub fees_sats: u64,
+    }
+
     #[open_api(ref_schemas[
         Address, Authorization, BatchIcannRegistrationData,
-        BitcoinOutputContent, BitName, BitNameDataUpdates, EncryptionPubKey,
-        FilledOutput, FilledOutputContent, MerkleRoot, MutableBitNameData,
-        OutPoint, OutputContent, Signature, Transaction, TransactionData, Txid,
-        VerifyingKey, WithdrawalOutputContent, bitnames_schema::BitcoinAddr,
-        bitnames_schema::BitcoinOutPoint,
+        BitcoinOutputContent, BitName, BitNameDataUpdates, Block, BlockHash,
+        Body, EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
+        MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
+        Signature, Transaction, TransactionData, Txid, VerifyingKey,
+        WithdrawalOutputContent, bitnames_schema::BitcoinAddr,
+        bitnames_schema::BitcoinBlockHash, bitnames_schema::BitcoinOutPoint,
     ])]
     #[rpc(client, server, server_bounds(Self: open_api::RpcServer))]
     pub trait Rpc {
@@ -327,6 +355,15 @@ pub mod wallet {
         /// Generate a mnemonic seed phrase
         #[method(name = "generate_mnemonic")]
         async fn generate_mnemonic(&self) -> RpcResult<String>;
+
+        /// Assemble a block to blind merge mine, without requesting BMM for it.
+        /// The caller requests BMM for `critical_hash` itself, then passes the
+        /// block back to `connect_block`.
+        #[open_api_method(output_schema(ToSchema))]
+        #[method(name = "get_block_template")]
+        async fn get_block_template(
+            &self,
+        ) -> RpcResult<GetBlockTemplateResponse>;
 
         /// Get a new address
         #[method(name = "get_new_address")]
