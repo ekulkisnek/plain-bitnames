@@ -154,7 +154,7 @@ where
         <MainchainTransport as tonic::client::GrpcService<
             tonic::body::Body,
         >>::Future: Send,
-    {
+{
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
         std::fs::create_dir_all(&env_path)?;
@@ -363,13 +363,13 @@ where
 
     pub fn submit_transaction(
         &self,
-        transaction: AuthorizedTransaction,
+        transaction: &AuthorizedTransaction,
     ) -> Result<(), Error> {
         {
-            let mut rotxn = self.env.write_txn()?;
-            self.state.validate_transaction(&rotxn, &transaction)?;
-            self.mempool.put(&mut rotxn, &transaction)?;
-            rotxn.commit().map_err(RwTxnError::from)?;
+            let mut rwtxn = self.env.write_txn()?;
+            self.state.validate_transaction(&rwtxn, transaction)?;
+            self.mempool.put(&mut rwtxn, transaction)?;
+            rwtxn.commit().map_err(RwTxnError::from)?;
         }
         self.net.push_tx(Default::default(), transaction);
         Ok(())

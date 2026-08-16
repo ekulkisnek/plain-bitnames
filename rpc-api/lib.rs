@@ -8,14 +8,14 @@ use plain_bitnames::{
     authorization::{Dst, Signature},
     net::{Peer, PeerConnectionStatus},
     types::{
-        Address, Authorization, BatchIcannRegistrationData, BitNameData,
-        BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent, Block,
-        BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
-        Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
-        Output, OutputContent, PointedOutput, SpentOutput, Transaction,
-        TransactionData, TxIn, Txid, VerifyingKey, WithdrawalBundle,
-        WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
-        hashes::BitName, schema as bitnames_schema,
+        Address, Authorization, Authorized, BatchIcannRegistrationData,
+        BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent,
+        Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
+        FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
+        MutableBitNameData, OutPoint, Output, OutputContent, PointedOutput,
+        SpentOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
+        WithdrawalBundle, WithdrawalOutputContent, XEncryptionSecretKey,
+        XVerifyingKey, hashes::BitName, schema as bitnames_schema,
     },
     wallet::Balance,
 };
@@ -64,16 +64,6 @@ pub trait Rpc {
     #[method(name = "bitnames")]
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
 
-    /// Deposit to address
-    #[open_api_method(output_schema(PartialSchema = "schema::BitcoinTxid"))]
-    #[method(name = "create_deposit")]
-    async fn create_deposit(
-        &self,
-        address: Address,
-        value_sats: u64,
-        fee_sats: u64,
-    ) -> RpcResult<bitcoin::Txid>;
-
     /// Connect to a peer
     #[open_api_method(output_schema(ToSchema))]
     #[method(name = "connect_peer")]
@@ -84,6 +74,42 @@ pub trait Rpc {
         ))]
         addr: SocketAddr,
     ) -> RpcResult<()>;
+
+    /// Deposit to address
+    #[open_api_method(output_schema(PartialSchema = "schema::BitcoinTxid"))]
+    #[method(name = "create_deposit")]
+    async fn create_deposit(
+        &self,
+        address: Address,
+        value_sats: u64,
+        fee_sats: u64,
+    ) -> RpcResult<bitcoin::Txid>;
+
+    /// Create a tx that transfers funds to the specified address
+    #[method(name = "create_transfer")]
+    async fn create_transfer(
+        &self,
+        dest: Address,
+        value_sats: u64,
+        fee_sats: u64,
+        memo: Option<String>,
+    ) -> RpcResult<Txid>;
+
+    /// Creates a tx that initiates a withdrawal to the specified mainchain
+    /// address
+    #[method(name = "create_withdrawal")]
+    async fn create_withdrawal(
+        &self,
+        #[open_api_method_arg(schema(
+            PartialSchema = "plain_bitnames::types::schema::BitcoinAddr"
+        ))]
+        mainchain_address: bitcoin::Address<
+            bitcoin::address::NetworkUnchecked,
+        >,
+        amount_sats: u64,
+        fee_sats: u64,
+        mainchain_fee_sats: u64,
+    ) -> RpcResult<Txid>;
 
     /// Decrypt a message with the specified encryption key corresponding to
     /// the specified encryption pubkey.
@@ -293,19 +319,24 @@ pub trait Rpc {
         msg: String,
     ) -> RpcResult<Authorization>;
 
+    /// Sign a transaction, and optionally broadcast it.
+    #[method(name = "sign_transaction")]
+    async fn sign_transaction(
+        &self,
+        transaction: Transaction,
+        broadcast: Option<bool>,
+    ) -> RpcResult<Authorized<Transaction>>;
+
+    /// Verify and broadcast a transaction
+    #[method(name = "submit_transaction")]
+    async fn submit_transaction(
+        &self,
+        transaction: Authorized<Transaction>,
+    ) -> RpcResult<Txid>;
+
     /// Stop the node
     #[method(name = "stop")]
     async fn stop(&self);
-
-    /// Transfer funds to the specified address
-    #[method(name = "transfer")]
-    async fn transfer(
-        &self,
-        dest: Address,
-        value: u64,
-        fee: u64,
-        memo: Option<String>,
-    ) -> RpcResult<Txid>;
 
     /// Verify a signature on a message against the specified verifying key.
     /// Returns `true` if the signature is valid
@@ -317,21 +348,6 @@ pub trait Rpc {
         dst: Dst,
         msg: String,
     ) -> RpcResult<bool>;
-
-    /// Initiate a withdrawal to the specified mainchain address
-    #[method(name = "withdraw")]
-    async fn withdraw(
-        &self,
-        #[open_api_method_arg(schema(
-            PartialSchema = "bitnames_schema::BitcoinAddr"
-        ))]
-        mainchain_address: bitcoin::Address<
-            bitcoin::address::NetworkUnchecked,
-        >,
-        amount_sats: u64,
-        fee_sats: u64,
-        mainchain_fee_sats: u64,
-    ) -> RpcResult<Txid>;
 }
 
 /// Wrapper struct for hex-encoded bytes

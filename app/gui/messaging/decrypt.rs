@@ -70,7 +70,7 @@ impl DecryptMessage {
         let ciphertext_response = egui::Panel::left("ciphertext message")
             .exact_size(ui.available_width() / 2.)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.monospace("Ciphertext message (hex):");
                     ui.add(egui::TextEdit::multiline(&mut self.ciphertext))
@@ -115,7 +115,7 @@ impl DecryptMessage {
             Some(Ok(plaintext_bytes)) => plaintext_bytes,
         };
         // show plaintext if possible
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let plaintext_hex = hex::encode(plaintext_bytes);
             ui.vertical_centered(|ui| {
                 ui.monospace("Decrypted message:");

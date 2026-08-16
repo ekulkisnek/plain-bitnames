@@ -61,7 +61,7 @@ impl MyBitnames {
         let _response = egui::Panel::left("My BitName Reservations")
             .exact_size(350.)
             .resizable(false)
-            .show_inside(ui, move |ui| {
+            .show(ui, move |ui| {
                 ui.heading("BitName Reservations");
                 egui::Grid::new("My BitName Reservations")
                     .num_columns(1)
@@ -143,7 +143,7 @@ impl MyBitnames {
         egui::Panel::left("My BitNames")
             .exact_size(350.)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.heading("BitNames");
                 egui::Grid::new("My BitNames")
                     .striped(true)

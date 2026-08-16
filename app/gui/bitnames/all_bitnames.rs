@@ -154,7 +154,7 @@ impl AllBitNames {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let Some(app) = app else {
                 return;
             };

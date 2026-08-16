@@ -9,6 +9,7 @@ use ed25519_bip32::XPrv;
 use fallible_iterator::FallibleIterator as _;
 use futures::{Stream, StreamExt};
 use heed::{
+    EnvFlags,
     byteorder::BigEndian,
     types::{Bytes, SerdeBincode, Str, U8, U32},
 };
@@ -99,7 +100,6 @@ impl Wallet {
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
         let env = {
-            use heed::EnvFlags;
             let mut env_open_options =
                 heed::EnvOpenOptions::new().read_txn_without_tls();
             env_open_options
