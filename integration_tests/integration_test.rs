@@ -9,9 +9,10 @@ use bip300301_enforcer_integration_tests::{
 };
 use bip300301_enforcer_lib::bins::CommandExt;
 use futures::{FutureExt, channel::mpsc::UnboundedSender, future::BoxFuture};
-use plain_bitnames_app_rpc_api::RpcClient as _;
+use plain_bitnames_app_rpc_api::node::RpcClient as _;
 
 use crate::{
+    block_template::block_template_trial,
     ibd::ibd_trial,
     register_bitname::register_bitname_trial,
     setup::{Init, PostSetup},
@@ -163,6 +164,11 @@ pub fn tests(
     failure_collector: TestFailureCollector,
 ) -> Vec<AsyncTrial<BoxFuture<'static, anyhow::Result<()>>>> {
     vec![
+        block_template_trial(
+            bin_paths.clone(),
+            file_registry.clone(),
+            failure_collector.clone(),
+        ),
         deposit_withdraw_roundtrip_trial(
             bin_paths.clone(),
             file_registry.clone(),
