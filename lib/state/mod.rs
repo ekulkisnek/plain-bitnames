@@ -4,7 +4,10 @@ use fallible_iterator::FallibleIterator as _;
 use futures::Stream;
 use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
-use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
+use sneed::{
+    DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey,
+    db::error as db_error,
+};
 
 use crate::{
     authorization::{self, Authorization},
@@ -192,6 +195,25 @@ impl State {
             .iter(rotxn)?
             .map(|(outpoint_key, spent_output)| {
                 Ok((outpoint_key.into(), spent_output))
+            })
+            .collect()?;
+        Ok(stxos)
+    }
+
+    pub fn get_stxos_by_addresses(
+        &self,
+        rotxn: &RoTxn,
+        addresses: &HashSet<Address>,
+    ) -> Result<HashMap<OutPoint, SpentOutput>, db_error::Iter> {
+        let stxos: HashMap<OutPoint, _> = self
+            .stxos
+            .iter(rotxn)?
+            .filter_map(|(key, output)| {
+                if addresses.contains(&output.output.address) {
+                    Ok(Some((key.into(), output)))
+                } else {
+                    Ok(None)
+                }
             })
             .collect()?;
         Ok(stxos)

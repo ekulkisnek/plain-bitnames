@@ -70,8 +70,8 @@ impl MyBitnames {
                         for (txid, commitment, plaintext_name) in
                             known_name_bitname_reservations
                         {
-                            let txid = hex::encode(txid.0);
-                            let commitment = hex::encode(commitment);
+                            let txid = const_hex::encode(txid.0);
+                            let commitment = const_hex::encode(commitment);
                             ui.vertical(|ui| {
                                 ui.monospace_selectable_singleline(
                                     true,
@@ -91,8 +91,8 @@ impl MyBitnames {
                         for (txid, commitment) in
                             unknown_name_bitname_reservations
                         {
-                            let txid = hex::encode(txid.0);
-                            let commitment = hex::encode(commitment);
+                            let txid = const_hex::encode(txid.0);
+                            let commitment = const_hex::encode(commitment);
                             ui.vertical(|ui| {
                                 ui.monospace_selectable_singleline(
                                     true,
@@ -159,7 +159,7 @@ impl MyBitnames {
                                     true,
                                     format!(
                                         "bitname: {}",
-                                        hex::encode(bitname.0)
+                                        const_hex::encode(bitname.0)
                                     ),
                                 );
                             });
@@ -168,7 +168,10 @@ impl MyBitnames {
                         for bitname in unknown_name_bitnames {
                             ui.monospace_selectable_singleline(
                                 true,
-                                format!("bitname: {}", hex::encode(bitname.0)),
+                                format!(
+                                    "bitname: {}",
+                                    const_hex::encode(bitname.0)
+                                ),
                             );
                             ui.end_row()
                         }

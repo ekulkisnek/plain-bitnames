@@ -14,7 +14,6 @@ use heed::{
     types::{Bytes, SerdeBincode, Str, U8, U32},
 };
 use rayon::prelude::ParallelSliceMut;
-use serde::{Deserialize, Serialize};
 use sneed::{DbError, Env, UnitKey};
 use thiserror::Error;
 use tokio_stream::{StreamMap, wrappers::WatchStream};
@@ -27,30 +26,16 @@ use crate::{
         InPoint, MutableBitNameData, OutPoint, OutPointKey, Output,
         OutputContent, SpentOutput, Transaction, TxData, VERSION, VerifyingKey,
         Version, WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
-        hashes::BitName, keys::Ecies,
+        hashes::BitName, keys::Ecies, wallet::Balance,
     },
     util::Watchable,
 };
 
 pub mod error;
-mod util;
-
-use util::KnownBip32Path;
-
 pub use error::Error;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
-pub struct Balance {
-    #[serde(rename = "total_sats", with = "bitcoin::amount::serde::as_sat")]
-    #[schema(value_type = u64)]
-    pub total: Amount,
-    #[serde(
-        rename = "available_sats",
-        with = "bitcoin::amount::serde::as_sat"
-    )]
-    #[schema(value_type = u64)]
-    pub available: Amount,
-}
+mod util;
+use util::KnownBip32Path;
 
 #[derive(Debug, Error)]
 #[error("Message signature verification key {vk} does not exist")]

@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use bitcoin::Amount;
 use jsonrpsee::{
@@ -9,15 +13,15 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     authorization::{self, Dst, Signature},
-    net::Peer,
     types::{
         Address, Authorization, BitName, BitNameData, Block, BlockHash,
         EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
         PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
         WithdrawalBundle,
         keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
+        net::Peer,
+        wallet::Balance,
     },
-    wallet::Balance,
 };
 use plain_bitnames_app_rpc_api::{RpcServer, TxInfo};
 use tower_http::{
@@ -99,7 +103,7 @@ impl RpcServer for RpcServerImpl {
         let memo = match memo {
             None => None,
             Some(memo) => {
-                let hex = hex::decode(memo).map_err(custom_err)?;
+                let hex = const_hex::decode(memo).map_err(custom_err)?;
                 Some(hex)
             }
         };
@@ -145,11 +149,11 @@ impl RpcServer for RpcServerImpl {
         encryption_pubkey: EncryptionPubKey,
         msg: String,
     ) -> RpcResult<String> {
-        let ciphertext = hex::decode(msg).map_err(custom_err)?;
+        let ciphertext = const_hex::decode(msg).map_err(custom_err)?;
         self.app
             .wallet
             .decrypt_msg(&encryption_pubkey, &ciphertext)
-            .map(hex::encode)
+            .map(const_hex::encode)
             .map_err(custom_err)
     }
 
@@ -160,7 +164,7 @@ impl RpcServer for RpcServerImpl {
     ) -> RpcResult<String> {
         Ecies::new(encryption_pubkey.0)
             .encrypt(msg.as_bytes())
-            .map(hex::encode)
+            .map(const_hex::encode)
             .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
     }
 
@@ -245,6 +249,21 @@ impl RpcServer for RpcServerImpl {
         self.app.get_paymail(None).map_err(custom_err)
     }
 
+    async fn get_stxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
+        let res = self
+            .app
+            .node
+            .get_stxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
+    }
+
     async fn get_transaction(
         &self,
         txid: Txid,
@@ -289,6 +308,21 @@ impl RpcServer for RpcServerImpl {
             txin,
         };
         Ok(Some(res))
+    }
+
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {
+        let res = self
+            .app
+            .node
+            .get_utxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
     }
 
     async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {

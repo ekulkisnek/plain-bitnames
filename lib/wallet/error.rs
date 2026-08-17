@@ -104,7 +104,7 @@ pub enum Error {
     #[error(transparent)]
     AmountUnderflow(#[from] AmountUnderflowError),
     #[error("authorization error")]
-    Authorization(#[from] crate::authorization::Error),
+    Authorization(#[from] crate::types::AuthorizationError),
     #[error("bip32 error")]
     Bip32(#[from] bitcoin::bip32::Error),
     #[error(transparent)]

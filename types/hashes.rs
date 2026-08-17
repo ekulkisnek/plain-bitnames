@@ -1,14 +1,15 @@
 use std::str::FromStr;
 
 use bitcoin::hashes::Hash as _;
+use blake3::Hasher;
 use borsh::{BorshDeserialize, BorshSerialize};
-use hex::FromHex;
+use const_hex::FromHex;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
-use super::serde_hexstr_human_readable;
+use crate::util::serde::hexstr_human_readable;
 
 #[derive(
     BorshSerialize,
@@ -25,7 +26,7 @@ use super::serde_hexstr_human_readable;
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct BlockHash(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+pub struct BlockHash(#[serde(with = "hexstr_human_readable")] pub Hash);
 
 impl From<Hash> for BlockHash {
     fn from(other: Hash) -> Self {
@@ -62,13 +63,13 @@ impl FromHex for BlockHash {
 
 impl std::fmt::Display for BlockHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
 impl std::fmt::Debug for BlockHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
@@ -109,7 +110,7 @@ impl utoipa::ToSchema for BlockHash {
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct MerkleRoot(#[serde(with = "serde_hexstr_human_readable")] Hash);
+pub struct MerkleRoot(#[serde(with = "hexstr_human_readable")] Hash);
 
 impl From<Hash> for MerkleRoot {
     fn from(other: Hash) -> Self {
@@ -125,13 +126,13 @@ impl From<MerkleRoot> for Hash {
 
 impl std::fmt::Display for MerkleRoot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
 impl std::fmt::Debug for MerkleRoot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
@@ -165,7 +166,7 @@ impl utoipa::ToSchema for MerkleRoot {
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct Txid(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+pub struct Txid(#[serde(with = "hexstr_human_readable")] pub Hash);
 
 impl Txid {
     pub fn as_slice(&self) -> &[u8] {
@@ -193,18 +194,18 @@ impl<'a> From<&'a Txid> for &'a Hash {
 
 impl std::fmt::Display for Txid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
 impl std::fmt::Debug for Txid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
 impl FromStr for Txid {
-    type Err = hex::FromHexError;
+    type Err = const_hex::FromHexError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Hash::from_hex(s).map(Self)
     }
@@ -241,11 +242,11 @@ impl utoipa::ToSchema for Txid {
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct BitName(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+pub struct BitName(#[serde(with = "hexstr_human_readable")] pub Hash);
 
 impl std::fmt::Display for BitName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", const_hex::encode(self.0))
     }
 }
 
@@ -298,9 +299,10 @@ pub fn hash<T>(data: &T) -> Hash
 where
     T: BorshSerialize,
 {
-    let data_serialized = borsh::to_vec(data)
+    let mut hasher = blake3::Hasher::new();
+    let () = borsh::to_writer(&mut hasher, data)
         .expect("failed to serialize with borsh to compute a hash");
-    blake3::hash(&data_serialized).into()
+    hasher.finalize().into()
 }
 
 /// Optimized hash function that reuses a thread-local scratch buffer
@@ -310,23 +312,16 @@ pub fn hash_with_scratch_buffer<T>(data: &T) -> Hash
 where
     T: BorshSerialize + ?Sized,
 {
-    use smallvec::SmallVec;
-
     thread_local! {
-        // Thread-local scratch buffer that starts with 256 bytes on the stack
-        // and grows as needed. This avoids heap allocations for most transactions.
-        static SCRATCH_BUFFER: std::cell::RefCell<SmallVec<[u8; 256]>> =
-            std::cell::RefCell::new(SmallVec::new());
+        static HASHER: std::cell::RefCell<blake3::Hasher> =
+            std::cell::RefCell::new(Hasher::new());
     }
 
-    SCRATCH_BUFFER.with(|buffer| {
-        let mut buffer = buffer.borrow_mut();
-        buffer.clear(); // Reuse the buffer
-
-        // Serialize directly into the reused buffer
-        borsh::to_writer(&mut *buffer, data)
+    HASHER.with(|hasher| {
+        let mut hasher = hasher.borrow_mut();
+        hasher.reset();
+        borsh::to_writer(&mut *hasher, data)
             .expect("failed to serialize with borsh to compute a hash");
-
-        blake3::hash(&buffer).into()
+        hasher.finalize().into()
     })
 }

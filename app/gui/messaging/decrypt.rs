@@ -91,7 +91,7 @@ impl DecryptMessage {
         };
         // regenerate plaintext if possible
         if receiver_input_response.changed() || ciphertext_response.changed() {
-            let ciphertext_bytes = match hex::decode(&self.ciphertext) {
+            let ciphertext_bytes = match const_hex::decode(&self.ciphertext) {
                 Ok(ciphertext_bytes) => ciphertext_bytes,
                 Err(err) => {
                     Self::show_error(ui, &anyhow::Error::from(err));
@@ -116,7 +116,7 @@ impl DecryptMessage {
         };
         // show plaintext if possible
         egui::CentralPanel::default().show(ui, |ui| {
-            let plaintext_hex = hex::encode(plaintext_bytes);
+            let plaintext_hex = const_hex::encode(plaintext_bytes);
             ui.vertical_centered(|ui| {
                 ui.monospace("Decrypted message:");
                 ui.monospace_selectable_multiline(plaintext_hex.as_str());

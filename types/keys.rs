@@ -1,107 +1,18 @@
 use borsh::BorshSerialize;
-use educe::Educe;
 use generic_array::{ArrayLength, GenericArray};
 use libes::{auth::HmacSha256, enc::Aes256Gcm, key::X25519};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr, FromInto, SerializeAs};
-use thiserror::Error;
 use utoipa::ToSchema;
 
-#[derive(Educe, Error)]
-#[educe(Debug(bound(TryFromError: std::fmt::Debug)))]
-enum Base58ckDecodeErrorInner<PrefixLen, TryFromError>
-where
-    PrefixLen: ArrayLength,
-{
-    #[error(transparent)]
-    Decode(#[from] bitcoin::base58::Error),
-    #[error(
-        "Incorrect prefix (`{}`): expected `{}`.",
-        hex::encode(.decoded),
-        hex::encode(.expected),
-    )]
-    IncorrectPrefix {
-        decoded: GenericArray<u8, PrefixLen>,
-        expected: GenericArray<u8, PrefixLen>,
-    },
-    #[error(
-        "Incorrect decoded byte length ({}). Expected {} bytes of data.",
-        .decoded,
-        .expected,
-    )]
-    IncorrectSize { decoded: usize, expected: usize },
-    #[error(transparent)]
-    TryFrom(TryFromError),
-}
-
-#[derive(Educe, Error)]
-#[educe(Debug(bound(
-    Base58ckDecodeErrorInner<PrefixLen, TryFromError>: std::fmt::Debug
-)))]
-#[error("Failed to decode base58ck")]
-#[repr(transparent)]
-pub struct Base58ckDecodeError<PrefixLen, TryFromError>(
-    #[source] Base58ckDecodeErrorInner<PrefixLen, TryFromError>,
-)
-where
-    PrefixLen: ArrayLength;
-
-impl<PrefixLen, TryFromError, E> From<E>
-    for Base58ckDecodeError<PrefixLen, TryFromError>
-where
-    PrefixLen: ArrayLength,
-    Base58ckDecodeErrorInner<PrefixLen, TryFromError>: From<E>,
-{
-    fn from(err: E) -> Self {
-        Self(err.into())
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("Wrong Bech32 HRP. Expected {expected} but decoded {decoded}")]
-pub struct WrongHrpError {
-    expected: bech32::Hrp,
-    decoded: bech32::Hrp,
-}
-
-#[derive(Debug, Error)]
-pub enum Bech32mDecodeError {
-    #[error(transparent)]
-    Bech32m(#[from] bech32::DecodeError),
-    #[error("Invalid bytes: {}", hex::encode(.bytes))]
-    InvalidBytes {
-        bytes: [u8; 32],
-        source: Box<ed25519_dalek::SignatureError>,
-    },
-    #[error(transparent)]
-    WrongHrp(#[from] Box<WrongHrpError>),
-    #[error(
-        "Wrong decoded byte length ({decoded_len}). Must decode to {expected_len} bytes of data."
-    )]
-    WrongSize {
-        decoded_len: usize,
-        expected_len: usize,
-    },
-    #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
-    WrongVariant,
-}
-
-fn borsh_serialize_x25519_pubkey<W>(
-    pk: &x25519_dalek::PublicKey,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(pk.as_bytes(), writer)
-}
+use crate::{error, util};
 
 /// Wrapper around x25519 pubkeys
 #[derive(BorshSerialize, Clone, Copy, Debug, Eq, Hash, PartialEq, ToSchema)]
 #[repr(transparent)]
 #[schema(value_type = String)]
 pub struct EncryptionPubKey(
-    #[borsh(serialize_with = "borsh_serialize_x25519_pubkey")]
+    #[borsh(serialize_with = "util::borsh::serialize::x25519_pubkey")]
     pub  x25519_dalek::PublicKey,
 );
 
@@ -116,10 +27,10 @@ impl EncryptionPubKey {
     }
 
     /// Decode from Bech32m format
-    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
+    pub fn bech32m_decode(s: &str) -> Result<Self, error::Bech32mDecode> {
         let (hrp, data) = bech32::decode(s)?;
         if hrp != Self::BECH32M_HRP {
-            let err = WrongHrpError {
+            let err = error::WrongHrp {
                 expected: Self::BECH32M_HRP,
                 decoded: hrp,
             };
@@ -128,7 +39,7 @@ impl EncryptionPubKey {
         let bytes = match <[u8; 32]>::try_from(data) {
             Ok(bytes) => bytes,
             Err(data) => {
-                return Err(Bech32mDecodeError::WrongSize {
+                return Err(error::Bech32mDecode::WrongSize {
                     decoded_len: data.len(),
                     expected_len: 32,
                 });
@@ -136,7 +47,7 @@ impl EncryptionPubKey {
         };
         let res = Self::from(bytes);
         if s != res.bech32m_encode() {
-            return Err(Bech32mDecodeError::WrongVariant);
+            return Err(error::Bech32mDecode::WrongVariant);
         }
         Ok(res)
     }
@@ -158,7 +69,7 @@ where
 }
 
 impl std::str::FromStr for EncryptionPubKey {
-    type Err = Bech32mDecodeError;
+    type Err = error::Bech32mDecode;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::bech32m_decode(s)
@@ -190,22 +101,12 @@ impl Serialize for EncryptionPubKey {
     }
 }
 
-fn borsh_serialize_ed25519_vk<W>(
-    vk: &ed25519_dalek::VerifyingKey,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(vk.as_bytes(), writer)
-}
-
 /// Wrapper around x25519 pubkeys
 #[derive(BorshSerialize, Clone, Copy, Debug, Eq, Hash, PartialEq, ToSchema)]
 #[repr(transparent)]
 #[schema(value_type = String)]
 pub struct VerifyingKey(
-    #[borsh(serialize_with = "borsh_serialize_ed25519_vk")]
+    #[borsh(serialize_with = "util::borsh::serialize::ed25519_vk")]
     pub  ed25519_dalek::VerifyingKey,
 );
 
@@ -222,10 +123,10 @@ impl VerifyingKey {
     }
 
     /// Decode from Bech32m format
-    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
+    pub fn bech32m_decode(s: &str) -> Result<Self, error::Bech32mDecode> {
         let (hrp, data) = bech32::decode(s)?;
         if hrp != Self::BECH32M_HRP {
-            let err = WrongHrpError {
+            let err = error::WrongHrp {
                 expected: Self::BECH32M_HRP,
                 decoded: hrp,
             };
@@ -234,7 +135,7 @@ impl VerifyingKey {
         let bytes = match <[u8; 32]>::try_from(data) {
             Ok(bytes) => bytes,
             Err(data) => {
-                return Err(Bech32mDecodeError::WrongSize {
+                return Err(error::Bech32mDecode::WrongSize {
                     decoded_len: data.len(),
                     expected_len: 32,
                 });
@@ -243,7 +144,7 @@ impl VerifyingKey {
         let res = match ed25519_dalek::VerifyingKey::from_bytes(&bytes) {
             Ok(vk) => Self(vk),
             Err(err) => {
-                let err = Bech32mDecodeError::InvalidBytes {
+                let err = error::Bech32mDecode::InvalidBytes {
                     bytes,
                     source: Box::new(err),
                 };
@@ -251,7 +152,7 @@ impl VerifyingKey {
             }
         };
         if s != res.bech32m_encode() {
-            return Err(Bech32mDecodeError::WrongVariant);
+            return Err(error::Bech32mDecode::WrongVariant);
         }
         Ok(res)
     }
@@ -290,7 +191,7 @@ impl TryFrom<&[u8; VerifyingKey::BYTE_LEN]> for VerifyingKey {
 }
 
 impl std::str::FromStr for VerifyingKey {
-    type Err = Bech32mDecodeError;
+    type Err = error::Bech32mDecode;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::bech32m_decode(s)
@@ -344,7 +245,7 @@ mod private {
     impl<T> Base58EncodingExtSealed for T where T: super::Base58Encoding {}
 }
 
-type B58ckDecodeError<T> = Base58ckDecodeError<
+type B58ckDecodeError<T> = error::Base58ckDecode<
     <T as Base58Encoding>::B58PrefixLen,
     <T as TryFrom<GenericArray<u8, <T as Base58Encoding>::ByteLen>>>::Error,
 >;
@@ -384,7 +285,7 @@ pub trait Base58EncodingExt:
             typenum::Sum<Self::B58PrefixLen, Self::ByteLen>,
         > = decoded.as_slice().try_into().map_err(
             |generic_array::LengthError| {
-                Base58ckDecodeErrorInner::IncorrectSize {
+                error::base58ck_decode::Inner::IncorrectSize {
                     decoded: decoded.len(),
                     expected: Self::B58PrefixLen::USIZE + Self::ByteLen::USIZE,
                 }
@@ -393,7 +294,7 @@ pub trait Base58EncodingExt:
         let (prefix, payload) =
             generic_array::sequence::Split::split(decoded.clone());
         if prefix != Self::B58_DATA_PREFIX {
-            return Err(Base58ckDecodeErrorInner::IncorrectPrefix {
+            return Err(error::base58ck_decode::Inner::IncorrectPrefix {
                 decoded: prefix,
                 expected: Self::B58_DATA_PREFIX,
             }
@@ -401,7 +302,7 @@ pub trait Base58EncodingExt:
         }
         payload
             .try_into()
-            .map_err(|err| Base58ckDecodeErrorInner::TryFrom(err).into())
+            .map_err(|err| error::base58ck_decode::Inner::TryFrom(err).into())
     }
 
     /// Encode to Base58ck
@@ -445,10 +346,10 @@ impl XPubKey {
     }
 
     /// Decode from Bech32m format
-    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
+    pub fn bech32m_decode(s: &str) -> Result<Self, error::Bech32mDecode> {
         let (hrp, data) = bech32::decode(s)?;
         if hrp != Self::BECH32M_HRP {
-            let err = WrongHrpError {
+            let err = error::WrongHrp {
                 expected: Self::BECH32M_HRP,
                 decoded: hrp,
             };
@@ -457,7 +358,7 @@ impl XPubKey {
         let bytes = match <[u8; Self::BYTE_LEN]>::try_from(data) {
             Ok(bytes) => bytes,
             Err(data) => {
-                return Err(Bech32mDecodeError::WrongSize {
+                return Err(error::Bech32mDecode::WrongSize {
                     decoded_len: data.len(),
                     expected_len: Self::BYTE_LEN,
                 });
@@ -465,7 +366,7 @@ impl XPubKey {
         };
         let res = Self(ed25519_bip32::XPub::from_bytes(bytes));
         if s != res.bech32m_encode() {
-            return Err(Bech32mDecodeError::WrongVariant);
+            return Err(error::Bech32mDecode::WrongVariant);
         }
         Ok(res)
     }
@@ -526,7 +427,7 @@ impl From<GenericArray<u8, <XPubKey as Base58Encoding>::ByteLen>> for XPubKey {
 }
 
 impl std::str::FromStr for XPubKey {
-    type Err = Base58ckDecodeError<
+    type Err = error::Base58ckDecode<
         <Self as Base58Encoding>::B58PrefixLen,
         std::convert::Infallible,
     >;
@@ -583,10 +484,10 @@ impl XVerifyingKey {
     }
 
     /// Decode from Bech32m format
-    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
+    pub fn bech32m_decode(s: &str) -> Result<Self, error::Bech32mDecode> {
         let (hrp, data) = bech32::decode(s)?;
         if hrp != Self::BECH32M_HRP {
-            let err = WrongHrpError {
+            let err = error::WrongHrp {
                 expected: Self::BECH32M_HRP,
                 decoded: hrp,
             };
@@ -595,7 +496,7 @@ impl XVerifyingKey {
         let bytes = match <[u8; Self::BYTE_LEN]>::try_from(data) {
             Ok(bytes) => bytes,
             Err(data) => {
-                return Err(Bech32mDecodeError::WrongSize {
+                return Err(error::Bech32mDecode::WrongSize {
                     decoded_len: data.len(),
                     expected_len: Self::BYTE_LEN,
                 });
@@ -603,7 +504,7 @@ impl XVerifyingKey {
         };
         let res = Self(ed25519_bip32::XPub::from_bytes(bytes));
         if s != res.bech32m_encode() {
-            return Err(Bech32mDecodeError::WrongVariant);
+            return Err(error::Bech32mDecode::WrongVariant);
         }
         Ok(res)
     }
@@ -666,7 +567,7 @@ impl From<GenericArray<u8, <XVerifyingKey as Base58Encoding>::ByteLen>>
 }
 
 impl std::str::FromStr for XVerifyingKey {
-    type Err = Base58ckDecodeError<
+    type Err = error::Base58ckDecode<
         <Self as Base58Encoding>::B58PrefixLen,
         std::convert::Infallible,
     >;
@@ -785,7 +686,7 @@ impl
 }
 
 impl std::str::FromStr for XEncryptionSecretKey {
-    type Err = Base58ckDecodeError<
+    type Err = error::Base58ckDecode<
         <Self as Base58Encoding>::B58PrefixLen,
         ed25519_bip32::PrivateKeyError,
     >;

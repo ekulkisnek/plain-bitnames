@@ -1,22 +1,24 @@
 //! RPC API
 
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
-use plain_bitnames::{
+use plain_bitnames_types::{
+    Address, Authorization, Authorized, BatchIcannRegistrationData,
+    BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent, Block,
+    BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
+    Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint, Output,
+    OutputContent, PointedOutput, SpentOutput, Transaction, TransactionData,
+    TxIn, Txid, VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
+    XEncryptionSecretKey, XVerifyingKey,
     authorization::{Dst, Signature},
+    hashes::BitName,
     net::{Peer, PeerConnectionStatus},
-    types::{
-        Address, Authorization, Authorized, BatchIcannRegistrationData,
-        BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent,
-        Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
-        FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
-        MutableBitNameData, OutPoint, Output, OutputContent, PointedOutput,
-        SpentOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
-        WithdrawalBundle, WithdrawalOutputContent, XEncryptionSecretKey,
-        XVerifyingKey, hashes::BitName, schema as bitnames_schema,
-    },
+    schema as bitnames_schema,
     wallet::Balance,
 };
 use serde::{Deserialize, Serialize};
@@ -101,7 +103,7 @@ pub trait Rpc {
     async fn create_withdrawal(
         &self,
         #[open_api_method_arg(schema(
-            PartialSchema = "plain_bitnames::types::schema::BitcoinAddr"
+            PartialSchema = "bitnames_schema::BitcoinAddr"
         ))]
         mainchain_address: bitcoin::Address<
             bitcoin::address::NetworkUnchecked,
@@ -164,7 +166,7 @@ pub trait Rpc {
     #[method(name = "get_bmm_inclusions")]
     async fn get_bmm_inclusions(
         &self,
-        block_hash: plain_bitnames::types::BlockHash,
+        block_hash: BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>>;
 
     /// Get the best known mainchain block hash
@@ -201,6 +203,13 @@ pub trait Rpc {
     #[method(name = "get_paymail")]
     async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
 
+    /// Get stxos for addresses
+    #[method(name = "get_stxos")]
+    async fn get_stxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<SpentOutput>>>;
+
     /// Get transaction by txid
     #[method(name = "get_transaction")]
     async fn get_transaction(
@@ -214,6 +223,13 @@ pub trait Rpc {
         &self,
         txid: Txid,
     ) -> RpcResult<Option<TxInfo>>;
+
+    /// Get utxos for addresses
+    #[method(name = "get_utxos")]
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
 
     /// Get wallet addresses, sorted by base58 encoding
     #[method(name = "get_wallet_addresses")]

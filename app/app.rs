@@ -268,9 +268,10 @@ impl App {
         let node = runtime.block_on(Node::new(
             config.net_addr,
             &config.datadir,
-            config.network,
             cusf_mainchain,
             cusf_mainchain_wallet,
+            config.network_magic_override,
+            config.network,
             &runtime,
             #[cfg(feature = "zmq")]
             config.zmq_addr,
