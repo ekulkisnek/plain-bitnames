@@ -277,10 +277,11 @@ impl ComponentRefs for openapi::OpenApi {
 
 // Check for errors within a schema.
 // This is a WIP and may not cover all possible errors.
-#[test]
-fn check_schema() -> anyhow::Result<()> {
-    let schema: openapi::OpenApi =
-        <crate::RpcDoc as utoipa::OpenApi>::openapi();
+fn check_schema<T>() -> anyhow::Result<()>
+where
+    T: utoipa::OpenApi,
+{
+    let schema: openapi::OpenApi = <T as utoipa::OpenApi>::openapi();
     let component_ref_locations = BTreeSet::<&str>::from_iter(
         schema
             .component_refs()
@@ -306,5 +307,13 @@ fn check_schema() -> anyhow::Result<()> {
             anyhow::bail!("No references to {component_ref}")
         }
     }
+    Ok(())
+}
+
+#[test]
+fn check_schemas() -> anyhow::Result<()> {
+    let () = check_schema::<crate::node::PrivateRpcDoc>()?;
+    let () = check_schema::<crate::node::RpcDoc>()?;
+    let () = check_schema::<crate::wallet::RpcDoc>()?;
     Ok(())
 }

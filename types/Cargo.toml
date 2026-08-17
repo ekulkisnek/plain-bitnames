@@ -14,7 +14,6 @@ educe = { workspace = true, features = ["Clone", "Debug"] }
 generic-array = { workspace = true }
 heed = { workspace = true, optional = true }
 hex-literal = { workspace = true }
-libes = { workspace = true }
 merkle-cbt = { workspace = true }
 nonempty = { workspace = true, features = ["serialize"] }
 rayon = { workspace = true }
@@ -31,6 +30,10 @@ x25519-dalek = { workspace = true, features = ["serde"] }
 [dependencies.ed25519-dalek]
 workspace = true
 features = ["batch", "digest", "hazmat", "serde"]
+
+[dependencies.libes]
+workspace = true
+features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
 [features]
 clap = ["dep:clap"]

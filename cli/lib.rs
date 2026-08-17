@@ -15,7 +15,12 @@ use plain_bitnames::{
         THIS_SIDECHAIN, VerifyingKey,
     },
 };
-use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
+use plain_bitnames_app_rpc_api::{
+    self as rpc_api,
+    bitname_commit::RpcClient as _,
+    node::{PrivateRpcClient as _, RpcClient as _},
+    wallet::RpcClient as _,
+};
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::Url;
 
@@ -470,9 +475,12 @@ where
             serde_json::to_string_pretty(&utxos)?
         }
         Command::OpenApiSchema => {
-            let openapi =
-                    <plain_bitnames_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
-            openapi.to_pretty_json()?
+            use utoipa::OpenApi as _;
+            let mut schema = rpc_api::open_api::RpcDoc::openapi();
+            schema.merge(rpc_api::node::PrivateRpcDoc::openapi());
+            schema.merge(rpc_api::node::RpcDoc::openapi());
+            schema.merge(rpc_api::wallet::RpcDoc::openapi());
+            schema.to_pretty_json()?
         }
         Command::PendingWithdrawalBundle => {
             let withdrawal_bundle =
