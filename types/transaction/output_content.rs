@@ -1,38 +1,8 @@
-use serde_with::{DeserializeAs, IfIsHumanReadable, SerializeAs, serde_as};
+use serde_with::{IfIsHumanReadable, serde_as};
 
-/// Serialize [`bitcoin::Amount`] as sats
-struct BitcoinAmountSats;
-
-impl<'de> DeserializeAs<'de, bitcoin::Amount> for BitcoinAmountSats {
-    fn deserialize_as<D>(deserializer: D) -> Result<bitcoin::Amount, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        bitcoin::amount::serde::as_sat::deserialize(deserializer)
-    }
-}
-
-impl SerializeAs<bitcoin::Amount> for BitcoinAmountSats {
-    fn serialize_as<S>(
-        source: &bitcoin::Amount,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        bitcoin::amount::serde::as_sat::serialize(source, serializer)
-    }
-}
-
-fn borsh_serialize_bitcoin_amount<W>(
-    bitcoin_amount: &bitcoin::Amount,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(&bitcoin_amount.to_sat(), writer)
-}
+use crate::util::{
+    borsh::serialize as borsh_serialize, serde::BitcoinAmountSats,
+};
 
 #[serde_as]
 #[derive(
@@ -50,28 +20,15 @@ where
 #[schema(value_type = u64)]
 #[serde(transparent)]
 pub struct BitcoinContent(
-    #[borsh(serialize_with = "borsh_serialize_bitcoin_amount")]
+    #[borsh(serialize_with = "borsh_serialize::bitcoin_amount")]
     #[serde_as(as = "IfIsHumanReadable<BitcoinAmountSats>")]
     pub bitcoin::Amount,
 );
 
-fn borsh_serialize_bitcoin_address<V, W>(
-    bitcoin_address: &bitcoin::Address<V>,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    V: bitcoin::address::NetworkValidation,
-    W: borsh::io::Write,
-{
-    let spk = bitcoin_address
-        .as_unchecked()
-        .assume_checked_ref()
-        .script_pubkey();
-    borsh::BorshSerialize::serialize(spk.as_bytes(), writer)
-}
-
 mod withdrawal_content {
     use serde::{Deserialize, Serialize};
+
+    use crate::util::borsh::serialize as borsh_serialize;
 
     /// Defines a WithdrawalContent struct with the specified visibility, name,
     /// derives, and attributes for each field
@@ -147,13 +104,13 @@ mod withdrawal_content {
             PartialEq
         )],
         value_attrs: [
-            borsh(serialize_with = "super::borsh_serialize_bitcoin_amount"),
+            borsh(serialize_with = "borsh_serialize::bitcoin_amount"),
         ],
         main_fee_attrs: [
-            borsh(serialize_with = "super::borsh_serialize_bitcoin_amount"),
+            borsh(serialize_with = "borsh_serialize::bitcoin_amount"),
         ],
         main_address_attrs: [
-            borsh(serialize_with = "super::borsh_serialize_bitcoin_address"),
+            borsh(serialize_with = "borsh_serialize::bitcoin_address"),
         ],
     );
 

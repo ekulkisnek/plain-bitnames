@@ -17,7 +17,7 @@ use tonic::transport::Channel;
 use crate::{
     archive::{self, Archive},
     mempool::{self, MemPool},
-    net::{self, Net, Peer},
+    net::{self, Net},
     state::{self, State},
     types::{
         Address, AmountOverflowError, AmountUnderflowError, Authorized,
@@ -25,6 +25,7 @@ use crate::{
         BmmResult, Body, FilledOutput, FilledTransaction, GetValue, Header,
         Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction, TxIn,
         Txid, WithdrawalBundle,
+        net::Peer,
         proto::{self, mainchain},
     },
     util::Watchable,

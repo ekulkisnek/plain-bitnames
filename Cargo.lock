@@ -5041,7 +5041,7 @@ dependencies = [
  "bitcoin",
  "jsonrpsee 0.25.1",
  "l2l-openapi",
- "plain_bitnames",
+ "plain_bitnames_types",
  "serde",
  "serde_json",
  "serde_with",

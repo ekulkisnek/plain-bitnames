@@ -3,21 +3,17 @@ use std::{borrow::Borrow, io::Cursor};
 use bitcoin::amount::CheckedSum;
 use borsh::{self, BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use utoipa::{PartialSchema, ToSchema};
 
 #[cfg(feature = "heed")]
 use heed::{BoxedError, BytesDecode, BytesEncode};
 
-use super::{
-    AmountOverflowError, GetValue,
-    address::Address,
-    hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
-    serde_display_fromstr_human_readable, serde_hexstr_human_readable,
-};
 use crate::{
-    BitNameDataUpdates, MutableBitNameData,
+    Address, AmountOverflowError, AmountUnderflowError, BitNameDataUpdates,
+    ComputeFeeError, GetFeeError, GetValue, MutableBitNameData,
     authorization::{Authorization, Signature},
+    hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
+    util,
 };
 
 mod output_content;
@@ -25,33 +21,6 @@ pub use output_content::{
     BitcoinContent as BitcoinOutputContent, Content, Filled as FilledContent,
     WithdrawalContent as WithdrawalOutputContent,
 };
-
-fn borsh_serialize_bitcoin_outpoint<W>(
-    block_hash: &bitcoin::OutPoint,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    let bitcoin::OutPoint { txid, vout } = block_hash;
-    let txid_bytes: &[u8; 32] = txid.as_ref();
-    borsh::BorshSerialize::serialize(&(txid_bytes, vout), writer)
-}
-
-fn borsh_deserialize_bitcoin_outpoint<R>(
-    reader: &mut R,
-) -> borsh::io::Result<bitcoin::OutPoint>
-where
-    R: borsh::io::Read,
-{
-    use bitcoin::hashes::Hash as _;
-    let (txid_bytes, vout): ([u8; 32], u32) =
-        <([u8; 32], u32) as BorshDeserialize>::deserialize_reader(reader)?;
-    Ok(bitcoin::OutPoint {
-        txid: bitcoin::Txid::from_byte_array(txid_bytes),
-        vout,
-    })
-}
 
 #[derive(
     BorshSerialize,
@@ -83,8 +52,8 @@ pub enum OutPoint {
     #[schema(value_type = crate::schema::BitcoinOutPoint)]
     Deposit(
         #[borsh(
-            serialize_with = "borsh_serialize_bitcoin_outpoint",
-            deserialize_with = "borsh_deserialize_bitcoin_outpoint"
+            deserialize_with = "util::borsh::deserialize::bitcoin_outpoint",
+            serialize_with = "util::borsh::serialize::bitcoin_outpoint"
         )]
         bitcoin::OutPoint,
     ),
@@ -335,10 +304,10 @@ pub enum InPoint {
     ToSchema,
 )]
 pub struct Output {
-    #[serde(with = "serde_display_fromstr_human_readable")]
+    #[serde(with = "util::serde::display_fromstr_human_readable")]
     pub address: Address,
     pub content: Content,
-    #[serde(with = "serde_hexstr_human_readable")]
+    #[serde(with = "util::serde::hexstr_human_readable")]
     pub memo: Vec<u8>,
 }
 
@@ -396,7 +365,7 @@ pub struct BatchIcannRegistrationData {
 pub enum TransactionData {
     BitNameReservation {
         /// commitment to the BitName that will be registered
-        #[serde(with = "serde_hexstr_human_readable")]
+        #[serde(with = "util::serde::hexstr_human_readable")]
         #[schema(value_type = String)]
         commitment: Hash,
     },
@@ -404,7 +373,7 @@ pub enum TransactionData {
         /// reveal of the name hash
         name_hash: BitName,
         /// reveal of the nonce used for the BitName reservation commitment
-        #[serde(with = "serde_hexstr_human_readable")]
+        #[serde(with = "util::serde::hexstr_human_readable")]
         #[schema(value_type = String)]
         revealed_nonce: Hash,
         /// initial BitName data
@@ -446,7 +415,7 @@ pub struct Transaction {
     pub inputs: TxInputs,
     #[schema(schema_with = TxOutputs::schema)]
     pub outputs: TxOutputs,
-    #[serde(with = "serde_hexstr_human_readable")]
+    #[serde(with = "util::serde::hexstr_human_readable")]
     #[schema(value_type = String)]
     pub memo: Vec<u8>,
     pub data: Option<TransactionData>,
@@ -579,10 +548,10 @@ impl Transaction {
 /// Representation of output that includes asset type
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct FilledOutput {
-    #[serde(with = "serde_display_fromstr_human_readable")]
+    #[serde(with = "util::serde::display_fromstr_human_readable")]
     pub address: Address,
     pub content: FilledContent,
-    #[serde(with = "serde_hexstr_human_readable")]
+    #[serde(with = "util::serde::hexstr_human_readable")]
     pub memo: Vec<u8>,
 }
 
@@ -663,16 +632,6 @@ pub struct SpentOutput {
     pub inpoint: InPoint,
 }
 
-#[derive(Debug, Error)]
-pub enum ComputeFeeError {
-    #[error("underfunded (value in < value out)")]
-    Underfunded,
-    #[error("value in overflow")]
-    ValueInOverflow(#[source] AmountOverflowError),
-    #[error("value out overflow")]
-    ValueOutOverflow(#[source] AmountOverflowError),
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
@@ -691,12 +650,12 @@ impl FilledTransaction {
     }
 
     /// Calculate the fee for this transaction
-    pub fn get_fee(&self) -> Result<bitcoin::Amount, super::GetFeeError> {
+    pub fn get_fee(&self) -> Result<bitcoin::Amount, GetFeeError> {
         let input_value = self.spent_utxos.iter().try_fold(
             bitcoin::Amount::ZERO,
             |acc, output| {
                 acc.checked_add(output.content.get_value())
-                    .ok_or(super::GetFeeError::AmountOverflow)
+                    .ok_or(GetFeeError::AmountOverflow(AmountOverflowError))
             },
         )?;
 
@@ -704,13 +663,13 @@ impl FilledTransaction {
             bitcoin::Amount::ZERO,
             |acc, output| {
                 acc.checked_add(output.content.get_value())
-                    .ok_or(super::GetFeeError::AmountOverflow)
+                    .ok_or(GetFeeError::AmountOverflow(AmountOverflowError))
             },
         )?;
 
         input_value
             .checked_sub(output_value)
-            .ok_or(super::GetFeeError::AmountUnderflow)
+            .ok_or(GetFeeError::AmountUnderflow(AmountUnderflowError))
     }
 
     /// If the tx is a bitname registration, returns the implied reservation

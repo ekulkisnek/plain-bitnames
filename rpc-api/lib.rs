@@ -4,19 +4,18 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
-use plain_bitnames::{
+use plain_bitnames_types::{
+    Address, Authorization, Authorized, BatchIcannRegistrationData,
+    BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent, Block,
+    BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
+    Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint, Output,
+    OutputContent, PointedOutput, SpentOutput, Transaction, TransactionData,
+    TxIn, Txid, VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
+    XEncryptionSecretKey, XVerifyingKey,
     authorization::{Dst, Signature},
+    hashes::BitName,
     net::{Peer, PeerConnectionStatus},
-    types::{
-        Address, Authorization, Authorized, BatchIcannRegistrationData,
-        BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent,
-        Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
-        FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
-        MutableBitNameData, OutPoint, Output, OutputContent, PointedOutput,
-        SpentOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
-        WithdrawalBundle, WithdrawalOutputContent, XEncryptionSecretKey,
-        XVerifyingKey, hashes::BitName, schema as bitnames_schema,
-    },
+    schema as bitnames_schema,
     wallet::Balance,
 };
 use serde::{Deserialize, Serialize};
@@ -101,7 +100,7 @@ pub trait Rpc {
     async fn create_withdrawal(
         &self,
         #[open_api_method_arg(schema(
-            PartialSchema = "plain_bitnames::types::schema::BitcoinAddr"
+            PartialSchema = "bitnames_schema::BitcoinAddr"
         ))]
         mainchain_address: bitcoin::Address<
             bitcoin::address::NetworkUnchecked,
@@ -164,7 +163,7 @@ pub trait Rpc {
     #[method(name = "get_bmm_inclusions")]
     async fn get_bmm_inclusions(
         &self,
-        block_hash: plain_bitnames::types::BlockHash,
+        block_hash: BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>>;
 
     /// Get the best known mainchain block hash

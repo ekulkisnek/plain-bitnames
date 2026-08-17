@@ -9,15 +9,15 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     authorization::{self, Dst, Signature},
-    net::Peer,
     types::{
         Address, Authorization, BitName, BitNameData, Block, BlockHash,
         EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
         PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
         WithdrawalBundle,
         keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
+        net::Peer,
+        wallet::Balance,
     },
-    wallet::Balance,
 };
 use plain_bitnames_app_rpc_api::{RpcServer, TxInfo};
 use tower_http::{

@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
-use super::serde_hexstr_human_readable;
+use crate::util::serde::hexstr_human_readable;
 
 #[derive(
     BorshSerialize,
@@ -25,7 +25,7 @@ use super::serde_hexstr_human_readable;
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct BlockHash(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+pub struct BlockHash(#[serde(with = "hexstr_human_readable")] pub Hash);
 
 impl From<Hash> for BlockHash {
     fn from(other: Hash) -> Self {
@@ -109,7 +109,7 @@ impl utoipa::ToSchema for BlockHash {
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct MerkleRoot(#[serde(with = "serde_hexstr_human_readable")] Hash);
+pub struct MerkleRoot(#[serde(with = "hexstr_human_readable")] Hash);
 
 impl From<Hash> for MerkleRoot {
     fn from(other: Hash) -> Self {
@@ -165,7 +165,7 @@ impl utoipa::ToSchema for MerkleRoot {
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct Txid(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+pub struct Txid(#[serde(with = "hexstr_human_readable")] pub Hash);
 
 impl Txid {
     pub fn as_slice(&self) -> &[u8] {
@@ -241,7 +241,7 @@ impl utoipa::ToSchema for Txid {
 )]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct BitName(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+pub struct BitName(#[serde(with = "hexstr_human_readable")] pub Hash);
 
 impl std::fmt::Display for BitName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
