@@ -1,17 +1,19 @@
 use std::str::FromStr;
 
 use borsh::BorshSerialize;
-use hex::FromHex;
+use const_hex::FromHex;
 use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
     Address, AuthorizedTransaction, Body, GetAddress, Transaction, Verify,
-    VerifyingKey,
+    VerifyingKey, error::Authorization as Error,
 };
 
-pub use ed25519_dalek::{SignatureError, Signer, SigningKey, Verifier};
+pub use ed25519_dalek::{Signer, Verifier};
+
+pub type SigningKey = ed25519_dalek::SigningKey;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ToSchema)]
 #[repr(transparent)]
@@ -33,7 +35,7 @@ impl<'de> Deserialize<'de> for Signature {
         D: serde::Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
-            hex::serde::deserialize(deserializer)
+            const_hex::serde::deserialize(deserializer)
         } else {
             ed25519_dalek::Signature::deserialize(deserializer).map(Self)
         }
@@ -72,7 +74,7 @@ impl Serialize for Signature {
         S: serde::Serializer,
     {
         if serializer.is_human_readable() {
-            hex::serde::serialize(self.0.to_bytes(), serializer)
+            const_hex::serde::serialize(self.0.to_bytes(), serializer)
         } else {
             self.0.serialize(serializer)
         }
@@ -89,26 +91,6 @@ pub enum Dst {
     Transaction = 0,
     /// Arbitrary, non-protocol messages
     Arbitrary = u8::MAX,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("borsh serialization error")]
-    BorshSerialize(#[from] borsh::io::Error),
-    #[error("ed25519_dalek error")]
-    Dalek(#[from] SignatureError),
-    #[error("not enough authorizations")]
-    NotEnoughAuthorizations,
-    #[error("too many authorizations")]
-    TooManyAuthorizations,
-    #[error(
-        "wrong key for address: address = {address},
-         hash(verifying_key) = {hash_verifying_key}"
-    )]
-    WrongKeyForAddress {
-        address: Address,
-        hash_verifying_key: Address,
-    },
 }
 
 #[derive(
@@ -270,7 +252,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
                 )
             },
         )
-        .collect::<Result<(), SignatureError>>()?;
+        .collect::<Result<(), ed25519_dalek::SignatureError>>()?;
     Ok(())
 }
 

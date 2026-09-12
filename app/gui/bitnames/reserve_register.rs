@@ -157,13 +157,13 @@ impl ReserveRegister {
         egui::Panel::left("reserve")
             .exact_size(ui.available_width() / 2.)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.heading("Reserve");
                     self.reserve.show(app, ui);
                 })
             });
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.heading("Register");
                 self.register.show(app, ui);

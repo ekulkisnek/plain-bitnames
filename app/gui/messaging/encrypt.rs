@@ -71,7 +71,7 @@ impl EncryptMessage {
         let plaintext_response = egui::Panel::left("plaintext message")
             .exact_size(ui.available_width() / 2.)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.monospace("Plaintext message:");
                     ui.add(egui::TextEdit::multiline(&mut self.plaintext))
@@ -100,7 +100,7 @@ impl EncryptMessage {
                 // ephemeral public keys & shared secrets.
                 Ecies::new(receiver_pubkey)
                     .encrypt(self.plaintext.as_bytes())
-                    .map(hex::encode)
+                    .map(const_hex::encode)
                     .map_err(|err| anyhow::anyhow!("{err:?}")),
             );
         }
@@ -114,7 +114,7 @@ impl EncryptMessage {
             }
             Some(Ok(ciphertext)) => ciphertext,
         };
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.monospace("Encrypted message:");
                 ui.monospace_selectable_multiline(ciphertext.as_str());

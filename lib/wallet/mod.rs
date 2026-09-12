@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -9,11 +10,11 @@ use ed25519_bip32::XPrv;
 use fallible_iterator::FallibleIterator as _;
 use futures::{Stream, StreamExt};
 use heed::{
+    EnvFlags,
     byteorder::BigEndian,
     types::{Bytes, SerdeBincode, Str, U8, U32},
 };
 use rayon::prelude::ParallelSliceMut;
-use serde::{Deserialize, Serialize};
 use sneed::{DbError, Env, UnitKey};
 use thiserror::Error;
 use tokio_stream::{StreamMap, wrappers::WatchStream};
@@ -27,29 +28,16 @@ use crate::{
         OutPointKey, Output, OutputContent, SpentOutput, Transaction, TxData,
         VERSION, VerifyingKey, Version, WithdrawalOutputContent,
         XEncryptionSecretKey, XVerifyingKey, hashes::BitName, keys::Ecies,
+        wallet::Balance,
     },
     util::Watchable,
 };
 
 pub mod error;
-mod util;
-
-use util::KnownBip32Path;
-
 pub use error::Error;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
-pub struct Balance {
-    #[serde(rename = "total_sats", with = "bitcoin::amount::serde::as_sat")]
-    #[schema(value_type = u64)]
-    pub total: Amount,
-    #[serde(
-        rename = "available_sats",
-        with = "bitcoin::amount::serde::as_sat"
-    )]
-    #[schema(value_type = u64)]
-    pub available: Amount,
-}
+mod util;
+use util::KnownBip32Path;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct TransferIntent {
@@ -109,7 +97,6 @@ impl Wallet {
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
         let env = {
-            use heed::EnvFlags;
             let mut env_open_options =
                 heed::EnvOpenOptions::new().read_txn_without_tls();
             env_open_options

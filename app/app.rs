@@ -18,7 +18,10 @@ use plain_bitnames::{
         hashes::BitName,
         proto::mainchain::{
             self,
-            generated::{validator_service_server, wallet_service_server},
+            generated::{
+                mining_service_server, validator_service_server,
+                wallet_service_server,
+            },
         },
     },
     wallet::{self, Wallet},
@@ -105,6 +108,22 @@ fn update(
     Ok(())
 }
 
+struct ProtoSupport {
+    miner: bool,
+    wallet: bool,
+}
+
+/// A block that is ready to be blind merged mined
+pub struct BlockTemplate {
+    /// Bribe to offer for this block
+    pub bribe: bitcoin::Amount,
+    pub header: types::Header,
+    pub height: u32,
+    pub body: types::Body,
+    /// Fees collected by the transactions in the block
+    pub fees: bitcoin::Amount,
+}
+
 #[derive(Clone)]
 pub struct App {
     pub node: Arc<Node>,
@@ -168,13 +187,14 @@ impl App {
         }
     }
 
-    /// Returns `true` if validator service AND wallet service are available,
-    /// `false` if only validator service is available, and error if validator
+    /// Returns `Ok(_)` iff validator service is available, and error if validator
     /// service is unavailable.
     async fn check_proto_support(
         transport: tonic::transport::channel::Channel,
-    ) -> Result<bool, tonic::Status> {
+    ) -> Result<ProtoSupport, tonic::Status> {
         let mut health_client = HealthClient::new(transport);
+
+        let mining_service_name = mining_service_server::SERVICE_NAME;
         let validator_service_name = validator_service_server::SERVICE_NAME;
         let wallet_service_name = wallet_service_server::SERVICE_NAME;
         // The validator service MUST exist. We therefore error out here directly.
@@ -189,16 +209,26 @@ impl App {
             )));
         }
         tracing::info!("Verified existence of {}", validator_service_name);
-        // The wallet service is optional.
+
+        // The mining and wallet services are optional.
+        let has_mining_service =
+            Self::check_status_serving(&mut health_client, mining_service_name)
+                .await?;
         let has_wallet_service =
             Self::check_status_serving(&mut health_client, wallet_service_name)
                 .await?;
         tracing::info!(
-            "Checked existence of {}: {}",
+            %has_mining_service,
+            %has_wallet_service,
+            "Checked existence of {}, {}",
+            mining_service_name,
             wallet_service_name,
-            has_wallet_service
         );
-        Ok(has_wallet_service)
+        let res = ProtoSupport {
+            miner: has_mining_service,
+            wallet: has_wallet_service,
+        };
+        Ok(res)
     }
 
     pub fn new(config: &Config) -> Result<Self, Error> {
@@ -212,7 +242,9 @@ impl App {
             config.datadir.display()
         );
         let wallet = Wallet::new(&config.datadir.join("wallet.mdb"))?;
-        if !wallet.has_seed()? && let Some(seed_phrase_path) = &config.mnemonic_seed_phrase_path {
+        if !wallet.has_seed()?
+            && let Some(seed_phrase_path) = &config.mnemonic_seed_phrase_path
+        {
             let mnemonic = std::fs::read_to_string(seed_phrase_path)?;
             let () = wallet.set_seed_from_mnemonic(mnemonic.as_str())?;
         }
@@ -227,22 +259,35 @@ impl App {
         .unwrap()
         .concurrency_limit(256)
         .connect_lazy();
-        let (cusf_mainchain, cusf_mainchain_wallet) = if runtime
-            .block_on(Self::check_proto_support(transport.clone()))
-            .map_err(|err| Error::VerifyMainchainServices {
-                url: Box::new(config.mainchain_grpc_url.clone()),
-                source: Box::new(err),
-            })? {
-            (
-                mainchain::ValidatorClient::new(transport.clone()),
-                Some(mainchain::WalletClient::new(transport)),
-            )
-        } else {
-            (mainchain::ValidatorClient::new(transport), None)
+        let (cusf_mainchain, cusf_mainchain_miner, cusf_mainchain_wallet) = {
+            let ProtoSupport { miner, wallet } = runtime
+                .block_on(Self::check_proto_support(transport.clone()))
+                .map_err(|err| Error::VerifyMainchainServices {
+                    url: Box::new(config.mainchain_grpc_url.clone()),
+                    source: Box::new(err),
+                })?;
+            let mining_client = if miner {
+                Some(mainchain::MiningClient::new(transport.clone()))
+            } else {
+                None
+            };
+            let wallet_client = if wallet {
+                Some(mainchain::WalletClient::new(transport.clone()))
+            } else {
+                None
+            };
+            let validator_client = mainchain::ValidatorClient::new(transport);
+            (validator_client, mining_client, wallet_client)
         };
         let miner = cusf_mainchain_wallet
             .clone()
-            .map(|wallet| Miner::new(cusf_mainchain.clone(), wallet))
+            .map(|wallet| {
+                Miner::new(
+                    cusf_mainchain.clone(),
+                    cusf_mainchain_miner.clone(),
+                    wallet,
+                )
+            })
             .transpose()?;
         let local_pool = LocalPoolHandle::new(1);
         tracing::debug!("Initializing node...");
@@ -251,9 +296,10 @@ impl App {
             config.tor_proxy_mode,
             config.tor_proxy_peer,
             &config.datadir,
-            config.network,
             cusf_mainchain,
             cusf_mainchain_wallet,
+            config.network_magic_override,
+            config.network,
             &runtime,
             #[cfg(feature = "zmq")]
             config.zmq_addr,
@@ -290,11 +336,18 @@ impl App {
         update(self.node.as_ref(), &mut self.utxos.write(), &self.wallet)
     }
 
-    pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
-        let authorized_transaction = self.wallet.authorize(tx)?;
-        self.node.submit_transaction(authorized_transaction)?;
+    pub fn submit_transaction(
+        &self,
+        tx: &plain_bitnames::types::AuthorizedTransaction,
+    ) -> Result<(), Error> {
+        self.node.submit_transaction(tx)?;
         let () = self.update()?;
         Ok(())
+    }
+
+    pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
+        let authorized_transaction = self.wallet.authorize(tx)?;
+        self.submit_transaction(&authorized_transaction)
     }
 
     pub async fn get_new_main_address(
@@ -548,10 +601,11 @@ impl App {
     const EMPTY_BLOCK_BMM_BRIBE: bitcoin::Amount =
         bitcoin::Amount::from_sat(1000);
 
-    pub async fn mine(
+    /// Assemble a block to blind merge mine, without requesting BMM for it
+    async fn build_block_template(
         &self,
         fee: Option<bitcoin::Amount>,
-    ) -> Result<(), Error> {
+    ) -> Result<BlockTemplate, Error> {
         let Some(miner) = self.miner.as_ref() else {
             return Err(Error::NoCusfMainchainWalletClient);
         };
@@ -623,7 +677,7 @@ impl App {
         } else {
             None
         };
-        let (bribe, header, body) = if prev_side_hash == tip_hash {
+        let (bribe, header, body, fees) = if prev_side_hash == tip_hash {
             const NUM_TRANSACTIONS: usize = 1000;
             let (txs, tx_fees) =
                 self.node.get_transactions(NUM_TRANSACTIONS)?;
@@ -653,7 +707,7 @@ impl App {
                     Self::EMPTY_BLOCK_BMM_BRIBE
                 }
             });
-            (bribe, header, body)
+            (bribe, header, body, tx_fees)
         } else {
             let coinbase = Vec::new();
             let merkle_root = Body::compute_merkle_root::<
@@ -666,8 +720,65 @@ impl App {
                 prev_main_hash,
             };
             let bribe = Self::EMPTY_BLOCK_BMM_BRIBE;
-            (bribe, header, body)
+            (bribe, header, body, bitcoin::Amount::ZERO)
         };
+        let height = match prev_side_hash {
+            None => 0,
+            Some(prev_side_hash) => self.node.get_height(prev_side_hash)? + 1,
+        };
+        Ok(BlockTemplate {
+            bribe,
+            header,
+            height,
+            body,
+            fees,
+        })
+    }
+
+    /// Assemble a block to blind merge mine. The caller requests BMM for
+    /// `header.hash()` itself, and submits the block via `connect_block` once
+    /// its BMM request is included in a mainchain block.
+    pub async fn get_block_template(&self) -> Result<BlockTemplate, Error> {
+        self.build_block_template(None).await
+    }
+
+    /// Connect a block for which a BMM request was included in the specified
+    /// mainchain block. Returns `true` if it was accepted as the new tip.
+    pub async fn connect_block(
+        &self,
+        block: types::Block,
+        main_block_hash: bitcoin::BlockHash,
+    ) -> Result<bool, Error> {
+        let types::Block {
+            header,
+            height: _,
+            body,
+        } = block;
+        let accepted = self
+            .node
+            .submit_block(main_block_hash, &header, &body)
+            .await?;
+        if accepted {
+            let () = self.update()?;
+        }
+        Ok(accepted)
+    }
+
+    /// Attempt to mine a sidechain block
+    pub async fn mine(
+        &self,
+        fee: Option<bitcoin::Amount>,
+    ) -> Result<(), Error> {
+        let Some(miner) = self.miner.as_ref() else {
+            return Err(Error::NoCusfMainchainWalletClient);
+        };
+        let BlockTemplate {
+            bribe,
+            header,
+            height: _,
+            body,
+            fees: _,
+        } = self.build_block_template(fee).await?;
         let mut miner_write = miner.write().await;
         miner_write
             .attempt_bmm(bribe.to_sat(), 0, header, body)

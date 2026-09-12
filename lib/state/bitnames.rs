@@ -340,10 +340,7 @@ impl Dbs {
     pub(in crate::state) fn new<Tls>(
         env: &sneed::Env<Tls>,
         rwtxn: &mut RwTxn,
-    ) -> Result<Self, env::error::CreateDb>
-    where
-        Tls: heed::TlsUsage,
-    {
+    ) -> Result<Self, env::error::CreateDb> {
         let bitnames = DatabaseUnique::create(env, rwtxn, "bitnames")?;
         let reservations =
             DatabaseUnique::create(env, rwtxn, "bitname_reservations")?;

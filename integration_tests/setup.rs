@@ -13,7 +13,9 @@ use futures::{TryFutureExt as _, channel::mpsc, future};
 use plain_bitnames::types::{
     FilledOutput, FilledOutputContent, Network, PointedOutput,
 };
-use plain_bitnames_app_rpc_api::RpcClient as _;
+use plain_bitnames_app_rpc_api::{
+    node::RpcClient as _, wallet::RpcClient as _,
+};
 use reserve_port::ReservedPort;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -260,7 +262,7 @@ impl Sidechain for PostSetup {
     {
         let _txid = self
             .rpc_client
-            .withdraw(
+            .create_withdrawal(
                 receive_address.as_unchecked().clone(),
                 value.to_sat(),
                 0,

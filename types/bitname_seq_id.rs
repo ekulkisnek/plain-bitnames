@@ -1,31 +1,8 @@
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use utoipa::{PartialSchema, ToSchema, openapi};
 
-#[derive(Debug, Error)]
-pub enum ParseBitNameSeqIdError {
-    #[error("Empty segment; cannot start with `-` char")]
-    EmptySegmentStart,
-    #[error("Empty segment; cannot end with `-` char")]
-    EmptySegmentEnd,
-    #[error("Empty segment; cannot contain sequential `-` chars")]
-    EmptySegment,
-    #[error("Invalid char; must contain only ASCII digits and `-`: `{char}`")]
-    InvalidChar { char: char },
-    #[error(
-        "Invalid segment; must contain exactly 4 ASCII digits: `{invalid_segment}`"
-    )]
-    InvalidSegment { invalid_segment: String },
-    #[error(
-        "Value overflow: BitName seq ID encodes a number greater than u32::MAX"
-    )]
-    Overflow,
-    #[error("Too few segments; 2 or 3 segments required")]
-    TooFewSegments,
-    #[error("Too many segments; 2 or 3 segments required")]
-    TooManySegments,
-}
+use crate::error::ParseBitNameSeqId as ParseBitNameSeqIdError;
 
 /// Sequential IDs for BitNames.
 /// Has a special 'human-readable' representation, used in Display, and

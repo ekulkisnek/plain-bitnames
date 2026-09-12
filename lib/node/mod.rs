@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fmt::Debug,
     net::SocketAddr,
     path::Path,
     sync::Arc,
@@ -10,14 +9,14 @@ use bitcoin::amount::CheckedSum;
 use fallible_iterator::FallibleIterator;
 use futures::{Stream, future::BoxFuture};
 use heed::EnvFlags;
-use sneed::{DbError, Env, EnvError, RwTxnError, env};
+use sneed::{DbError, Env, EnvError, RwTxnError};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
 use crate::{
-    archive::{self, Archive},
+    archive::Archive,
     mempool::{self, MemPool},
-    net::{self, Net, Peer, TorProxyStatus},
+    net::{Net, TorProxyStatus},
     state::{self, State},
     types::{
         Address, AmountOverflowError, AmountUnderflowError, Authorized,
@@ -25,97 +24,20 @@ use crate::{
         BmmResult, Body, FilledOutput, FilledTransaction, GetValue, Header,
         Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction, TxIn,
         Txid, WithdrawalBundle,
+        net::Peer,
         proto::{self, mainchain},
     },
     util::Watchable,
 };
 
+pub(crate) mod error;
+pub use error::Error;
 mod mainchain_task;
-mod net_task;
-
 use mainchain_task::MainchainTaskHandle;
+mod net_task;
 use net_task::NetTaskHandle;
 #[cfg(feature = "zmq")]
 use net_task::ZmqPubHandler;
-
-#[allow(clippy::duplicated_attributes)]
-#[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(env::error::OpenEnv, EnvError))]
-#[transitive(from(env::error::ReadTxn, EnvError))]
-#[transitive(from(env::error::WriteTxn, EnvError))]
-pub enum Error {
-    #[error("address parse error")]
-    AddrParse(#[from] std::net::AddrParseError),
-    #[error(transparent)]
-    AmountOverflow(#[from] AmountOverflowError),
-    #[error(transparent)]
-    AmountUnderflow(#[from] AmountUnderflowError),
-    #[error("archive error")]
-    Archive(#[from] archive::Error),
-    #[error("CUSF mainchain proto error")]
-    CusfMainchain(#[from] proto::Error),
-    #[error(transparent)]
-    Db(Box<DbError>),
-    #[error("Database env error")]
-    DbEnv(#[from] EnvError),
-    #[error("Database write error")]
-    DbWrite(#[from] RwTxnError),
-    #[error("I/O error")]
-    Io(#[from] std::io::Error),
-    #[error("error requesting mainchain ancestors")]
-    MainchainAncestors(#[source] mainchain_task::ResponseError),
-    #[error("mempool error")]
-    MemPool(#[from] mempool::Error),
-    #[error("net error")]
-    Net(#[source] Box<net::Error>),
-    #[error("net task error")]
-    NetTask(#[source] Box<net_task::Error>),
-    #[error("No CUSF mainchain wallet client")]
-    NoCusfMainchainWalletClient,
-    #[error("block {block_hash} is not on the current canonical chain")]
-    NonCanonicalBlock { block_hash: BlockHash },
-    #[error("peer info stream closed")]
-    PeerInfoRxClosed,
-    #[error("Receive mainchain task response cancelled")]
-    ReceiveMainchainTaskResponse,
-    #[error("Send mainchain task request failed")]
-    SendMainchainTaskRequest,
-    #[error("state error")]
-    State(#[source] Box<state::Error>),
-    #[error("Tor proxy mode has no connected tunnel peer")]
-    TorProxyUnavailable,
-    #[error("Utreexo error: {0}")]
-    Utreexo(String),
-    #[error("Verify BMM error")]
-    VerifyBmm(anyhow::Error),
-    #[cfg(feature = "zmq")]
-    #[error("ZMQ error")]
-    Zmq(#[from] zeromq::ZmqError),
-}
-
-impl From<DbError> for Error {
-    fn from(err: DbError) -> Self {
-        Self::Db(Box::new(err))
-    }
-}
-
-impl From<net::Error> for Error {
-    fn from(err: net::Error) -> Self {
-        Self::Net(Box::new(err))
-    }
-}
-
-impl From<net_task::Error> for Error {
-    fn from(err: net_task::Error) -> Self {
-        Self::NetTask(Box::new(err))
-    }
-}
-
-impl From<state::Error> for Error {
-    fn from(err: state::Error) -> Self {
-        Self::State(Box::new(err))
-    }
-}
 
 pub type FilledTransactionWithPosition =
     (Authorized<FilledTransaction>, Option<TxIn>);
@@ -165,11 +87,12 @@ where
         tor_proxy_mode: bool,
         tor_proxy_peer: Option<SocketAddr>,
         datadir: &Path,
-        network: Network,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
         cusf_mainchain_wallet: Option<
             mainchain::WalletClient<MainchainTransport>,
         >,
+        magic_bytes_override: Option<crate::net::peer_message::MagicBytes>,
+        network: Network,
         runtime: &tokio::runtime::Runtime,
         #[cfg(feature = "zmq")] zmq_addr: SocketAddr,
     ) -> Result<Self, Error>
@@ -179,7 +102,7 @@ where
         <MainchainTransport as tonic::client::GrpcService<
             tonic::body::Body,
         >>::Future: Send,
-    {
+{
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
         std::fs::create_dir_all(&env_path)?;
@@ -231,6 +154,7 @@ where
         let (net, peer_info_rx) = Net::new(
             &env,
             archive.clone(),
+            magic_bytes_override,
             network,
             state.clone(),
             bind_addr,
@@ -426,7 +350,7 @@ where
 
     pub fn submit_transaction(
         &self,
-        transaction: AuthorizedTransaction,
+        transaction: &AuthorizedTransaction,
     ) -> Result<(), Error> {
         let tor_proxy_status = self.net.tor_proxy_status();
         if !tor_proxy_status.allows_transaction_submission() {
@@ -434,10 +358,10 @@ where
         }
         let txid = transaction.transaction.txid();
         {
-            let mut rotxn = self.env.write_txn()?;
-            self.state.validate_transaction(&rotxn, &transaction)?;
-            self.mempool.put(&mut rotxn, &transaction)?;
-            rotxn.commit().map_err(RwTxnError::from)?;
+            let mut rwtxn = self.env.write_txn()?;
+            self.state.validate_transaction(&rwtxn, transaction)?;
+            self.mempool.put(&mut rwtxn, transaction)?;
+            rwtxn.commit().map_err(RwTxnError::from)?;
         }
         let queued_peers = self.net.push_tx(Default::default(), transaction);
         if tor_proxy_status.tor_proxy_mode && queued_peers == 0 {
@@ -489,6 +413,18 @@ where
             }
         }
         Ok(spent)
+    }
+
+    pub fn get_stxos_by_addresses(
+        &self,
+        addresses: &HashSet<Address>,
+    ) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let stxos = self
+            .state
+            .get_stxos_by_addresses(&rotxn, addresses)
+            .map_err(DbError::from)?;
+        Ok(stxos)
     }
 
     pub fn get_utxos_by_addresses(

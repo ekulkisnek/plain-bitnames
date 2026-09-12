@@ -1,4 +1,5 @@
 use std::{
+    marker::PhantomData,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::LazyLock,
     time::Duration,
@@ -14,9 +15,28 @@ use plain_bitnames::{
         THIS_SIDECHAIN, VerifyingKey,
     },
 };
-use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
+use plain_bitnames_app_rpc_api::{
+    self as rpc_api,
+    bitname_commit::RpcClient as _,
+    node::{PrivateRpcClient as _, RpcClient as _},
+    wallet::RpcClient as _,
+};
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::Url;
+
+struct JsonParser<T>(PhantomData<T>);
+
+impl<T> JsonParser<T> {
+    fn parse(
+        s: &str,
+    ) -> Result<T, serde_path_to_error::Error<serde_json::Error>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut deserializer = serde_json::Deserializer::from_str(s);
+        serde_path_to_error::deserialize(&mut deserializer)
+    }
+}
 
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
@@ -27,6 +47,12 @@ pub enum Command {
     BitnameData { bitname_id: BitName },
     /// List all BitNames
     Bitnames,
+    /// Connect a block for which a BMM request was included in the specified
+    /// mainchain block. The block is the JSON returned by `get-block-template`.
+    ConnectBlock {
+        block: String,
+        main_block_hash: bitcoin::BlockHash,
+    },
     /// Connect to a peer
     ConnectPeer { addr: SocketAddr },
     /// Deposit to address
@@ -36,6 +62,25 @@ pub enum Command {
         value_sats: u64,
         #[arg(long)]
         fee_sats: u64,
+    },
+    /// Create a tx that transfers funds to the specified address
+    CreateTransfer {
+        dest: Address,
+        #[arg(long)]
+        value_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+    },
+    /// Creates a tx that initiates a withdrawal to the specified mainchain
+    /// address
+    CreateWithdrawal {
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        #[arg(long)]
+        amount_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+        #[arg(long)]
+        mainchain_fee_sats: u64,
     },
     /// Decrypt a message with the specified encryption key corresponding to
     /// the specified encryption pubkey
@@ -67,8 +112,12 @@ pub enum Command {
     GetBestMainchainBlockHash,
     /// Get the best sidechain block hash
     GetBestSidechainBlockHash,
-    /// Get block data
+    /// Get the block with specified block hash, if it exists
     GetBlock { block_hash: BlockHash },
+    /// Get the current block count
+    GetBlockcount,
+    /// Assemble a block to blind merge mine, without requesting BMM for it
+    GetBlockTemplate,
     /// Get mainchain blocks that commit to a specified block hash
     GetBmmInclusions {
         block_hash: plain_bitnames::types::BlockHash,
@@ -79,10 +128,18 @@ pub enum Command {
     GetNewEncryptionKey,
     /// Get a new verifying key
     GetNewVerifyingKey,
-    /// Get the current block count
-    GetBlockcount,
     /// Get all paymail
     GetPaymail,
+    /// Get stxos for addresses
+    GetStxos {
+        #[arg(required = true)]
+        addresses: Vec<Address>,
+    },
+    /// Get utxos for addresses
+    GetUtxos {
+        #[arg(required = true)]
+        addresses: Vec<Address>,
+    },
     /// Get wallet addresses, sorted by base58 encoding
     GetWalletAddresses,
     /// Get wallet master XEncryptionSecretKey
@@ -144,16 +201,23 @@ pub enum Command {
         #[arg(long)]
         msg: String,
     },
+    /// Sign a transaction, and optionally broadcast it.
+    SignTransaction {
+        #[arg(value_parser = JsonParser::<plain_bitnames::types::Transaction>::parse)]
+        transaction: plain_bitnames::types::Transaction,
+        #[arg(default_value_t = false)]
+        broadcast: bool,
+    },
+    /// Verify and broadcast a transaction
+    SubmitTransaction {
+        #[arg(
+            value_parser =
+                JsonParser::<plain_bitnames::types::AuthorizedTransaction>::parse
+        )]
+        transaction: plain_bitnames::types::AuthorizedTransaction,
+    },
     /// Stop the node
     Stop,
-    /// Transfer funds to the specified address
-    Transfer {
-        dest: Address,
-        #[arg(long)]
-        value_sats: u64,
-        #[arg(long)]
-        fee_sats: u64,
-    },
     /// Verify a signature on a message against the specified verifying key.
     /// Returns `true` if the signature is valid
     VerifySignature {
@@ -165,16 +229,6 @@ pub enum Command {
         dst: Dst,
         #[arg(long)]
         msg: String,
-    },
-    /// Initiate a withdrawal to the specified mainchain address
-    Withdraw {
-        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-        #[arg(long)]
-        amount_sats: u64,
-        #[arg(long)]
-        fee_sats: u64,
-        #[arg(long)]
-        mainchain_fee_sats: u64,
     },
 }
 
@@ -274,6 +328,15 @@ where
             let bitnames = rpc_client.bitnames().await?;
             serde_json::to_string_pretty(&bitnames)?
         }
+        Command::ConnectBlock {
+            block,
+            main_block_hash,
+        } => {
+            let block = serde_json::from_str(&block)?;
+            let accepted =
+                rpc_client.connect_block(block, main_block_hash).await?;
+            format!("{accepted}")
+        }
         Command::ConnectPeer { addr } => {
             let () = rpc_client.connect_peer(addr).await?;
             String::default()
@@ -288,6 +351,32 @@ where
                 .await?;
             format!("{txid}")
         }
+        Command::CreateTransfer {
+            dest,
+            value_sats,
+            fee_sats,
+        } => {
+            let txid = rpc_client
+                .create_transfer(dest, value_sats, fee_sats, None)
+                .await?;
+            format!("{txid}")
+        }
+        Command::CreateWithdrawal {
+            mainchain_address,
+            amount_sats,
+            fee_sats,
+            mainchain_fee_sats,
+        } => {
+            let txid = rpc_client
+                .create_withdrawal(
+                    mainchain_address,
+                    amount_sats,
+                    fee_sats,
+                    mainchain_fee_sats,
+                )
+                .await?;
+            format!("{txid}")
+        }
         Command::DecryptMsg {
             encryption_pubkey,
             msg,
@@ -296,7 +385,7 @@ where
             let msg_hex =
                 rpc_client.decrypt_msg(encryption_pubkey, msg).await?;
             if utf8 {
-                let msg_bytes: Vec<u8> = hex::decode(msg_hex)?;
+                let msg_bytes: Vec<u8> = const_hex::decode(msg_hex)?;
                 String::from_utf8(msg_bytes)?
             } else {
                 msg_hex
@@ -330,6 +419,10 @@ where
             let block_hash = rpc_client.get_best_sidechain_block_hash().await?;
             serde_json::to_string_pretty(&block_hash)?
         }
+        Command::GetBlockTemplate => {
+            let template = rpc_client.get_block_template().await?;
+            serde_json::to_string_pretty(&template)?
+        }
         Command::GetBmmInclusions { block_hash } => {
             let bmm_inclusions =
                 rpc_client.get_bmm_inclusions(block_hash).await?;
@@ -350,6 +443,16 @@ where
         Command::GetPaymail => {
             let paymail = rpc_client.get_paymail().await?;
             serde_json::to_string_pretty(&paymail)?
+        }
+        Command::GetStxos { addresses } => {
+            let addresses = addresses.into_iter().collect();
+            let stxos = rpc_client.get_stxos(addresses).await?;
+            serde_json::to_string_pretty(&stxos)?
+        }
+        Command::GetUtxos { addresses } => {
+            let addresses = addresses.into_iter().collect();
+            let utxos = rpc_client.get_utxos(addresses).await?;
+            serde_json::to_string_pretty(&utxos)?
         }
         Command::GetWalletAddresses => {
             let addresses = rpc_client.get_wallet_addresses().await?;
@@ -393,9 +496,12 @@ where
             serde_json::to_string_pretty(&utxos)?
         }
         Command::OpenApiSchema => {
-            let openapi =
-                    <plain_bitnames_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
-            openapi.to_pretty_json()?
+            use utoipa::OpenApi as _;
+            let mut schema = rpc_api::open_api::RpcDoc::openapi();
+            schema.merge(rpc_api::node::PrivateRpcDoc::openapi());
+            schema.merge(rpc_api::node::RpcDoc::openapi());
+            schema.merge(rpc_api::wallet::RpcDoc::openapi());
+            schema.to_pretty_json()?
         }
         Command::PendingWithdrawalBundle => {
             let withdrawal_bundle =
@@ -440,19 +546,22 @@ where
                 rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
             serde_json::to_string_pretty(&authorization)?
         }
+        Command::SignTransaction {
+            transaction,
+            broadcast,
+        } => {
+            let authorized = rpc_client
+                .sign_transaction(transaction, Some(broadcast))
+                .await?;
+            serde_json::to_string_pretty(&authorized)?
+        }
+        Command::SubmitTransaction { transaction } => {
+            let txid = rpc_client.submit_transaction(transaction).await?;
+            format!("{txid}")
+        }
         Command::Stop => {
             let () = rpc_client.stop().await?;
             String::default()
-        }
-        Command::Transfer {
-            dest,
-            value_sats,
-            fee_sats,
-        } => {
-            let txid = rpc_client
-                .transfer(dest, value_sats, fee_sats, None, None)
-                .await?;
-            format!("{txid}")
         }
         Command::VerifySignature {
             signature,
@@ -464,22 +573,6 @@ where
                 .verify_signature(signature, verifying_key, dst, msg)
                 .await?;
             format!("{res}")
-        }
-        Command::Withdraw {
-            mainchain_address,
-            amount_sats,
-            fee_sats,
-            mainchain_fee_sats,
-        } => {
-            let txid = rpc_client
-                .withdraw(
-                    mainchain_address,
-                    amount_sats,
-                    fee_sats,
-                    mainchain_fee_sats,
-                )
-                .await?;
-            format!("{txid}")
         }
     })
 }

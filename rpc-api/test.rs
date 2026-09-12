@@ -2,8 +2,6 @@ use std::collections::BTreeSet;
 
 use utoipa::openapi::{self, Ref, RefOr, Schema};
 
-use crate::RpcClient as _;
-
 /// Get all component refs
 trait ComponentRefs {
     fn component_refs(&self) -> impl Iterator<Item = &Ref> + '_;
@@ -279,10 +277,11 @@ impl ComponentRefs for openapi::OpenApi {
 
 // Check for errors within a schema.
 // This is a WIP and may not cover all possible errors.
-#[test]
-fn check_schema() -> anyhow::Result<()> {
-    let schema: openapi::OpenApi =
-        <crate::RpcDoc as utoipa::OpenApi>::openapi();
+fn check_schema<T>() -> anyhow::Result<()>
+where
+    T: utoipa::OpenApi,
+{
+    let schema: openapi::OpenApi = <T as utoipa::OpenApi>::openapi();
     let component_ref_locations = BTreeSet::<&str>::from_iter(
         schema
             .component_refs()
@@ -311,10 +310,19 @@ fn check_schema() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn check_schemas() -> anyhow::Result<()> {
+    let () = check_schema::<crate::node::PrivateRpcDoc>()?;
+    let () = check_schema::<crate::node::RpcDoc>()?;
+    let () = check_schema::<crate::wallet::RpcDoc>()?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn bitname_data_at_position_rpc_contract() -> anyhow::Result<()> {
+    use crate::node::RpcClient as _;
     use jsonrpsee::{RpcModule, http_client::HttpClientBuilder};
-    use plain_bitnames::types::{
+    use plain_bitnames_types::{
         BitName, BitNameData, BitNameSeqId, BlockHash, MutableBitNameData,
     };
 

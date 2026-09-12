@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::Mutex};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use bitcoin::Amount;
 use jsonrpsee::{
@@ -9,17 +13,18 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     authorization::{self, Dst, Signature},
-    net::{Peer, TorProxyStatus},
+    net::TorProxyStatus,
     types::{
         Address, Authorization, BitName, BitNameData, BitNameDataUpdates,
         BitNameResolution, Block, BlockHash, EncryptionPubKey, FilledOutput,
         MutableBitNameData, OutPoint, PaymailEntry, PointedOutput, SpentOutput,
         Transaction, Txid, VerifyingKey, WithdrawalBundle,
         keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
+        net::Peer,
+        wallet::Balance,
     },
-    wallet::Balance,
 };
-use plain_bitnames_app_rpc_api::{RpcServer, TxInfo};
+use plain_bitnames_app_rpc_api::{self as rpc_api, node::TxInfo};
 use tower_http::{
     cors::CorsLayer,
     request_id::{
@@ -42,17 +47,69 @@ where
     custom_err_msg(format!("{error:#}"))
 }
 
-pub struct RpcServerImpl {
+pub struct PrivateOnlyRpcServerImpl;
+
+#[async_trait]
+impl rpc_api::open_api::RpcServer for PrivateOnlyRpcServerImpl {
+    async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
+        use utoipa::OpenApi as _;
+        let mut res = rpc_api::open_api::RpcDoc::openapi();
+        res.merge(rpc_api::node::PrivateRpcDoc::openapi());
+        res.merge(rpc_api::wallet::RpcDoc::openapi());
+        Ok(res)
+    }
+}
+
+#[derive(Clone)]
+pub struct RpcServerImpl<const ENABLE_PRIVATE_API: bool> {
     app: App,
-    transfer_lock: Mutex<()>,
+    transfer_lock: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 #[async_trait]
-impl RpcServer for RpcServerImpl {
-    async fn balance(&self) -> RpcResult<Balance> {
-        self.app.wallet.get_balance().map_err(custom_err)
+impl rpc_api::open_api::RpcServer for RpcServerImpl<false> {
+    async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
+        use utoipa::OpenApi as _;
+        let mut res = rpc_api::open_api::RpcDoc::openapi();
+        res.merge(rpc_api::node::RpcDoc::openapi());
+        Ok(res)
+    }
+}
+
+#[async_trait]
+impl rpc_api::open_api::RpcServer for RpcServerImpl<true> {
+    async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
+        use utoipa::OpenApi as _;
+        let mut res = rpc_api::open_api::RpcDoc::openapi();
+        res.merge(rpc_api::node::PrivateRpcDoc::openapi());
+        res.merge(rpc_api::node::RpcDoc::openapi());
+        res.merge(rpc_api::wallet::RpcDoc::openapi());
+        Ok(res)
+    }
+}
+
+#[async_trait]
+impl rpc_api::node::PrivateRpcServer for RpcServerImpl<true> {
+    async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+        self.app.node.connect_peer(addr).map_err(custom_err)
     }
 
+    async fn forget_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+        match self.app.node.forget_peer(&addr) {
+            Ok(_) => Ok(()),
+            Err(err) => Err(custom_err(err)),
+        }
+    }
+
+    async fn stop(&self) {
+        std::process::exit(0);
+    }
+}
+
+#[async_trait]
+impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
+    for RpcServerImpl<ENABLE_PRIVATE_API>
+{
     async fn bitname_data(
         &self,
         bitname_id: BitName,
@@ -61,6 +118,29 @@ impl RpcServer for RpcServerImpl {
             .node
             .get_current_bitname_data(&bitname_id)
             .map_err(custom_err)
+    }
+
+    async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
+        self.app.node.bitnames().map_err(custom_err)
+    }
+
+    async fn connect_block(
+        &self,
+        block: Block,
+        main_block_hash: bitcoin::BlockHash,
+    ) -> RpcResult<bool> {
+        self.app
+            .local_pool
+            .spawn_pinned({
+                let app = self.app.clone();
+                move || async move {
+                    app.connect_block(block, main_block_hash)
+                        .await
+                        .map_err(custom_err)
+                }
+            })
+            .await
+            .unwrap()
     }
 
     async fn bitname_data_at_position(
@@ -75,10 +155,6 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
-    async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
-        self.app.node.bitnames().map_err(custom_err)
-    }
-
     async fn resolve_bitname(
         &self,
         bitname: BitName,
@@ -86,74 +162,12 @@ impl RpcServer for RpcServerImpl {
         self.app.resolve_bitname(bitname).map_err(custom_err)
     }
 
-    async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
-        self.app.node.connect_peer(addr).map_err(custom_err)
+    async fn get_paymail_entries(&self) -> RpcResult<Vec<PaymailEntry>> {
+        self.app.get_paymail_entries(None).map_err(custom_err)
     }
 
-    async fn create_deposit(
-        &self,
-        address: Address,
-        value_sats: u64,
-        fee_sats: u64,
-    ) -> RpcResult<bitcoin::Txid> {
-        let app = self.app.clone();
-        tokio::task::spawn_blocking(move || {
-            app.deposit_blocking(
-                address,
-                bitcoin::Amount::from_sat(value_sats),
-                bitcoin::Amount::from_sat(fee_sats),
-            )
-            .map_err(custom_err)
-        })
-        .await
-        .unwrap()
-    }
-
-    async fn decrypt_msg(
-        &self,
-        encryption_pubkey: EncryptionPubKey,
-        msg: String,
-    ) -> RpcResult<String> {
-        let ciphertext = hex::decode(msg).map_err(custom_err)?;
-        self.app
-            .wallet
-            .decrypt_msg(&encryption_pubkey, &ciphertext)
-            .map(hex::encode)
-            .map_err(custom_err)
-    }
-
-    async fn encrypt_msg(
-        &self,
-        encryption_pubkey: EncryptionPubKey,
-        msg: String,
-    ) -> RpcResult<String> {
-        Ecies::new(encryption_pubkey.0)
-            .encrypt(msg.as_bytes())
-            .map(hex::encode)
-            .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
-    }
-
-    async fn forget_peer(&self, addr: SocketAddr) -> RpcResult<()> {
-        match self.app.node.forget_peer(&addr) {
-            Ok(_) => Ok(()),
-            Err(err) => Err(custom_err(err)),
-        }
-    }
-
-    async fn format_deposit_address(
-        &self,
-        address: Address,
-    ) -> RpcResult<String> {
-        let deposit_address = address.format_for_deposit();
-        Ok(deposit_address)
-    }
-
-    async fn generate_mnemonic(&self) -> RpcResult<String> {
-        let mnemonic = bip39::Mnemonic::new(
-            bip39::MnemonicType::Words12,
-            bip39::Language::English,
-        );
-        Ok(mnemonic.to_string())
+    async fn tor_proxy_status(&self) -> RpcResult<TorProxyStatus> {
+        Ok(self.app.node.tor_proxy_status())
     }
 
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
@@ -198,24 +212,23 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
-    async fn get_new_address(&self) -> RpcResult<Address> {
-        self.app.wallet.get_new_address().map_err(custom_err)
-    }
-
-    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey> {
-        self.app.wallet.get_new_encryption_key().map_err(custom_err)
-    }
-
-    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey> {
-        self.app.wallet.get_new_verifying_key().map_err(custom_err)
-    }
-
     async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>> {
         self.app.get_paymail(None).map_err(custom_err)
     }
 
-    async fn get_paymail_entries(&self) -> RpcResult<Vec<PaymailEntry>> {
-        self.app.get_paymail_entries(None).map_err(custom_err)
+    async fn get_stxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
+        let res = self
+            .app
+            .node
+            .get_stxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
     }
 
     async fn get_transaction(
@@ -264,6 +277,241 @@ impl RpcServer for RpcServerImpl {
         Ok(Some(res))
     }
 
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {
+        let res = self
+            .app
+            .node
+            .get_utxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
+    }
+
+    async fn getblockcount(&self) -> RpcResult<u32> {
+        let height = self.app.node.try_get_tip_height().map_err(custom_err)?;
+        let block_count = height.map_or(0, |height| height + 1);
+        Ok(block_count)
+    }
+
+    async fn latest_failed_withdrawal_bundle_height(
+        &self,
+    ) -> RpcResult<Option<u32>> {
+        let height = self
+            .app
+            .node
+            .get_latest_failed_withdrawal_bundle_height()
+            .map_err(custom_err)?;
+        Ok(height)
+    }
+
+    async fn list_peers(&self) -> RpcResult<Vec<Peer>> {
+        let peers = self.app.node.get_active_peers();
+        Ok(peers)
+    }
+
+    async fn list_stxos(&self) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
+        let stxos = self.app.node.get_all_stxos().map_err(custom_err)?;
+        let res = stxos
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
+    }
+
+    async fn list_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {
+        let utxos = self.app.node.get_all_utxos().map_err(custom_err)?;
+        let res = utxos
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
+    }
+
+    async fn pending_withdrawal_bundle(
+        &self,
+    ) -> RpcResult<Option<WithdrawalBundle>> {
+        self.app
+            .node
+            .try_get_pending_withdrawal_bundle()
+            .map_err(custom_err)
+    }
+
+    async fn sidechain_wealth_sats(&self) -> RpcResult<u64> {
+        let sidechain_wealth =
+            self.app.node.get_sidechain_wealth().map_err(custom_err)?;
+        Ok(sidechain_wealth.to_sat())
+    }
+
+    async fn submit_transaction(
+        &self,
+        transaction: plain_bitnames::types::AuthorizedTransaction,
+    ) -> RpcResult<Txid> {
+        let () = self
+            .app
+            .submit_transaction(&transaction)
+            .map_err(custom_err)?;
+        Ok(transaction.transaction.txid())
+    }
+}
+
+#[async_trait]
+impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
+    async fn balance(&self) -> RpcResult<Balance> {
+        self.app.wallet.get_balance().map_err(custom_err)
+    }
+
+    async fn create_deposit(
+        &self,
+        address: Address,
+        value_sats: u64,
+        fee_sats: u64,
+    ) -> RpcResult<bitcoin::Txid> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || {
+            app.deposit_blocking(
+                address,
+                bitcoin::Amount::from_sat(value_sats),
+                bitcoin::Amount::from_sat(fee_sats),
+            )
+            .map_err(custom_err)
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn create_transfer(
+        &self,
+        dest: Address,
+        value_sats: u64,
+        fee_sats: u64,
+        memo: Option<String>,
+    ) -> RpcResult<Txid> {
+        let memo = match memo {
+            None => None,
+            Some(memo) => {
+                let hex = const_hex::decode(memo).map_err(custom_err)?;
+                Some(hex)
+            }
+        };
+        let tx = self
+            .app
+            .wallet
+            .create_transfer(
+                dest,
+                Amount::from_sat(value_sats),
+                Amount::from_sat(fee_sats),
+                memo,
+            )
+            .map_err(custom_err)?;
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
+    async fn create_withdrawal(
+        &self,
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        amount_sats: u64,
+        fee_sats: u64,
+        mainchain_fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        let tx = self
+            .app
+            .wallet
+            .create_withdrawal(
+                mainchain_address,
+                Amount::from_sat(amount_sats),
+                Amount::from_sat(mainchain_fee_sats),
+                Amount::from_sat(fee_sats),
+            )
+            .map_err(custom_err)?;
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
+    async fn decrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String> {
+        let ciphertext = const_hex::decode(msg).map_err(custom_err)?;
+        self.app
+            .wallet
+            .decrypt_msg(&encryption_pubkey, &ciphertext)
+            .map(const_hex::encode)
+            .map_err(custom_err)
+    }
+
+    async fn encrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String> {
+        Ecies::new(encryption_pubkey.0)
+            .encrypt(msg.as_bytes())
+            .map(const_hex::encode)
+            .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
+    }
+
+    async fn format_deposit_address(
+        &self,
+        address: Address,
+    ) -> RpcResult<String> {
+        let deposit_address = address.format_for_deposit();
+        Ok(deposit_address)
+    }
+
+    async fn generate_mnemonic(&self) -> RpcResult<String> {
+        let mnemonic = bip39::Mnemonic::new(
+            bip39::MnemonicType::Words12,
+            bip39::Language::English,
+        );
+        Ok(mnemonic.to_string())
+    }
+
+    async fn get_block_template(
+        &self,
+    ) -> RpcResult<rpc_api::wallet::GetBlockTemplateResponse> {
+        let template = self
+            .app
+            .local_pool
+            .spawn_pinned({
+                let app = self.app.clone();
+                move || async move {
+                    app.get_block_template().await.map_err(custom_err)
+                }
+            })
+            .await
+            .unwrap()?;
+        Ok(rpc_api::wallet::GetBlockTemplateResponse {
+            critical_hash: template.header.hash(),
+            block: Block {
+                header: template.header,
+                height: template.height,
+                body: template.body,
+            },
+            fees_sats: template.fees.to_sat(),
+        })
+    }
+
+    async fn get_new_address(&self) -> RpcResult<Address> {
+        self.app.wallet.get_new_address().map_err(custom_err)
+    }
+
+    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey> {
+        self.app.wallet.get_new_encryption_key().map_err(custom_err)
+    }
+
+    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey> {
+        self.app.wallet.get_new_verifying_key().map_err(custom_err)
+    }
+
     async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {
         let addrs = self.app.wallet.get_addresses().map_err(custom_err)?;
         let mut res: Vec<_> = addrs.into_iter().collect();
@@ -299,50 +547,6 @@ impl RpcServer for RpcServerImpl {
         Ok(utxos)
     }
 
-    async fn getblockcount(&self) -> RpcResult<u32> {
-        let height = self.app.node.try_get_tip_height().map_err(custom_err)?;
-        let block_count = height.map_or(0, |height| height + 1);
-        Ok(block_count)
-    }
-
-    async fn latest_failed_withdrawal_bundle_height(
-        &self,
-    ) -> RpcResult<Option<u32>> {
-        let height = self
-            .app
-            .node
-            .get_latest_failed_withdrawal_bundle_height()
-            .map_err(custom_err)?;
-        Ok(height)
-    }
-
-    async fn list_peers(&self) -> RpcResult<Vec<Peer>> {
-        let peers = self.app.node.get_active_peers();
-        Ok(peers)
-    }
-
-    async fn tor_proxy_status(&self) -> RpcResult<TorProxyStatus> {
-        Ok(self.app.node.tor_proxy_status())
-    }
-
-    async fn list_stxos(&self) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
-        let stxos = self.app.node.get_all_stxos().map_err(custom_err)?;
-        let res = stxos
-            .into_iter()
-            .map(|(outpoint, output)| PointedOutput { outpoint, output })
-            .collect();
-        Ok(res)
-    }
-
-    async fn list_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {
-        let utxos = self.app.node.get_all_utxos().map_err(custom_err)?;
-        let res = utxos
-            .into_iter()
-            .map(|(outpoint, output)| PointedOutput { outpoint, output })
-            .collect();
-        Ok(res)
-    }
-
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
         let fee = fee.map(bitcoin::Amount::from_sat);
         self.app
@@ -365,21 +569,6 @@ impl RpcServer for RpcServerImpl {
             .map(|(outpoint, output)| PointedOutput { outpoint, output })
             .collect();
         Ok(utxos)
-    }
-
-    async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
-        let res =
-            <plain_bitnames_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
-        Ok(res)
-    }
-
-    async fn pending_withdrawal_bundle(
-        &self,
-    ) -> RpcResult<Option<WithdrawalBundle>> {
-        self.app
-            .node
-            .try_get_pending_withdrawal_bundle()
-            .map_err(custom_err)
     }
 
     async fn register_bitname(
@@ -413,28 +602,11 @@ impl RpcServer for RpcServerImpl {
         Ok(txid)
     }
 
-    async fn update_bitname(
-        &self,
-        bitname: BitName,
-        updates: BitNameDataUpdates,
-        fee_sats: u64,
-    ) -> RpcResult<Txid> {
-        self.app
-            .update_bitname(bitname, updates, Amount::from_sat(fee_sats))
-            .map_err(custom_err)
-    }
-
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {
         self.app
             .wallet
             .set_seed_from_mnemonic(mnemonic.as_str())
             .map_err(custom_err)
-    }
-
-    async fn sidechain_wealth_sats(&self) -> RpcResult<u64> {
-        let sidechain_wealth =
-            self.app.node.get_sidechain_wealth().map_err(custom_err)?;
-        Ok(sidechain_wealth.to_sat())
     }
 
     async fn sign_arbitrary_msg(
@@ -459,8 +631,15 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
-    async fn stop(&self) {
-        std::process::exit(0);
+    async fn update_bitname(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        self.app
+            .update_bitname(bitname, updates, Amount::from_sat(fee_sats))
+            .map_err(custom_err)
     }
 
     async fn transfer(
@@ -478,7 +657,7 @@ impl RpcServer for RpcServerImpl {
         let memo = match memo {
             None => None,
             Some(memo) => {
-                let hex = hex::decode(memo).map_err(custom_err)?;
+                let hex = const_hex::decode(memo).map_err(custom_err)?;
                 Some(hex)
             }
         };
@@ -505,6 +684,22 @@ impl RpcServer for RpcServerImpl {
         Ok(txid)
     }
 
+    async fn sign_transaction(
+        &self,
+        transaction: plain_bitnames::types::Transaction,
+        broadcast: Option<bool>,
+    ) -> RpcResult<plain_bitnames::types::AuthorizedTransaction> {
+        let authorized =
+            self.app.wallet.authorize(transaction).map_err(custom_err)?;
+        if let Some(true) = broadcast {
+            let () = self
+                .app
+                .submit_transaction(&authorized)
+                .map_err(custom_err)?;
+        }
+        Ok(authorized)
+    }
+
     async fn verify_signature(
         &self,
         signature: Signature,
@@ -519,28 +714,6 @@ impl RpcServer for RpcServerImpl {
             msg.as_bytes(),
         );
         Ok(res)
-    }
-
-    async fn withdraw(
-        &self,
-        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-        amount_sats: u64,
-        fee_sats: u64,
-        mainchain_fee_sats: u64,
-    ) -> RpcResult<Txid> {
-        let tx = self
-            .app
-            .wallet
-            .create_withdrawal(
-                mainchain_address,
-                Amount::from_sat(amount_sats),
-                Amount::from_sat(mainchain_fee_sats),
-                Amount::from_sat(fee_sats),
-            )
-            .map_err(custom_err)?;
-        let txid = tx.txid();
-        self.app.sign_and_send(tx).map_err(custom_err)?;
-        Ok(txid)
     }
 }
 
@@ -567,73 +740,143 @@ impl MakeRequestId for RequestIdMaker {
     }
 }
 
+pub struct ServerAddesses {
+    pub _rpc_addr: SocketAddr,
+    pub _private_rpc_addr: SocketAddr,
+}
+
 pub async fn run_server(
     app: App,
+    private_rpc_addr: SocketAddr,
     rpc_addr: SocketAddr,
-) -> anyhow::Result<SocketAddr> {
+) -> anyhow::Result<ServerAddesses> {
     const REQUEST_ID_HEADER: &str = "x-request-id";
 
     // Ordering here matters! Order here is from official docs on request IDs tracings
     // https://docs.rs/tower-http/latest/tower_http/request_id/index.html#using-trace
-    let tracer = tower::ServiceBuilder::new()
-        .layer(SetRequestIdLayer::new(
-            http::HeaderName::from_static(REQUEST_ID_HEADER),
-            RequestIdMaker,
-        ))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(move |request: &http::Request<_>| {
-                    let request_id = request
-                        .headers()
-                        .get(http::HeaderName::from_static(REQUEST_ID_HEADER))
-                        .and_then(|h| h.to_str().ok())
-                        .filter(|s| !s.is_empty());
+    let tracer = || {
+        tower::ServiceBuilder::new()
+            .layer(SetRequestIdLayer::new(
+                http::HeaderName::from_static(REQUEST_ID_HEADER),
+                RequestIdMaker,
+            ))
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(move |request: &http::Request<_>| {
+                        let request_id = request
+                            .headers()
+                            .get(http::HeaderName::from_static(
+                                REQUEST_ID_HEADER,
+                            ))
+                            .and_then(|h| h.to_str().ok())
+                            .filter(|s| !s.is_empty());
 
-                    tracing::span!(
-                        tracing::Level::DEBUG,
-                        "request",
-                        method = %request.method(),
-                        uri = %request.uri(),
-                        request_id , // this is needed for the record call below to work
+                        tracing::span!(
+                            tracing::Level::DEBUG,
+                            "request",
+                            method = %request.method(),
+                            uri = %request.uri(),
+                            request_id , // this is needed for the record call below to work
+                        )
+                    })
+                    .on_request(())
+                    .on_eos(())
+                    .on_response(
+                        DefaultOnResponse::new().level(tracing::Level::INFO),
                     )
-                })
-                .on_request(())
-                .on_eos(())
-                .on_response(
-                    DefaultOnResponse::new().level(tracing::Level::INFO),
-                )
-                .on_failure(
-                    DefaultOnFailure::new().level(tracing::Level::ERROR),
-                ),
-        )
-        .layer(PropagateRequestIdLayer::new(http::HeaderName::from_static(
-            REQUEST_ID_HEADER,
-        )))
-        .into_inner();
+                    .on_failure(
+                        DefaultOnFailure::new().level(tracing::Level::ERROR),
+                    ),
+            )
+            .layer(PropagateRequestIdLayer::new(http::HeaderName::from_static(
+                REQUEST_ID_HEADER,
+            )))
+            .into_inner()
+    };
 
-    let http_middleware = tower::ServiceBuilder::new()
-        .layer(tracer)
-        .layer(CorsLayer::permissive());
-    let rpc_middleware = RpcServiceBuilder::new().rpc_logger(1024);
+    let http_middleware = || {
+        tower::ServiceBuilder::new()
+            .layer(tracer())
+            .layer(CorsLayer::permissive())
+    };
+    let rpc_middleware = || RpcServiceBuilder::new().rpc_logger(1024);
 
     let server = Server::builder()
-        .set_http_middleware(http_middleware)
-        .set_rpc_middleware(rpc_middleware)
+        .set_http_middleware(http_middleware())
+        .set_rpc_middleware(rpc_middleware())
         .build(rpc_addr)
         .await?;
 
-    let addr = server.local_addr()?;
-    let handle = server.start(
-        RpcServerImpl {
+    let rpc_server_addr = server.local_addr()?;
+
+    let (_task_handle, server_addrs) = if private_rpc_addr != rpc_addr {
+        let private_rpc_server = Server::builder()
+            .set_http_middleware(http_middleware())
+            .set_rpc_middleware(rpc_middleware())
+            .build(private_rpc_addr)
+            .await?;
+        let private_rpc_server_addr = private_rpc_server.local_addr()?;
+
+        let rpc_server_handle = {
+            let rpc_server_impl = RpcServerImpl::<false> {
+                app: app.clone(),
+                transfer_lock: Default::default(),
+            };
+            let mut rpc_module =
+                rpc_api::open_api::RpcServer::into_rpc(rpc_server_impl.clone());
+            rpc_module
+                .merge(rpc_api::node::RpcServer::into_rpc(rpc_server_impl))?;
+            server.start(rpc_module)
+        };
+        let private_only_rpc_server_handle = {
+            let rpc_server_impl = RpcServerImpl::<true> {
+                app,
+                transfer_lock: Default::default(),
+            };
+            let mut rpc_module = rpc_api::open_api::RpcServer::into_rpc(
+                PrivateOnlyRpcServerImpl,
+            );
+            rpc_module.merge(rpc_api::node::PrivateRpcServer::into_rpc(
+                rpc_server_impl.clone(),
+            ))?;
+            rpc_module
+                .merge(rpc_api::wallet::RpcServer::into_rpc(rpc_server_impl))?;
+            private_rpc_server.start(rpc_module)
+        };
+        let server_addrs = ServerAddesses {
+            _rpc_addr: rpc_server_addr,
+            _private_rpc_addr: private_rpc_server_addr,
+        };
+        let task_handle = tokio::spawn(async {
+            tokio::select! {
+                () = rpc_server_handle.stopped() => (),
+                () = private_only_rpc_server_handle.stopped() => (),
+            }
+        });
+        (task_handle, server_addrs)
+    } else {
+        let rpc_server_impl = RpcServerImpl::<true> {
             app,
-            transfer_lock: Mutex::new(()),
-        }
-        .into_rpc(),
-    );
+            transfer_lock: Default::default(),
+        };
+        let mut rpc_module =
+            rpc_api::open_api::RpcServer::into_rpc(rpc_server_impl.clone());
+        rpc_module.merge(rpc_api::node::PrivateRpcServer::into_rpc(
+            rpc_server_impl.clone(),
+        ))?;
+        rpc_module.merge(rpc_api::node::RpcServer::into_rpc(
+            rpc_server_impl.clone(),
+        ))?;
+        rpc_module
+            .merge(rpc_api::wallet::RpcServer::into_rpc(rpc_server_impl))?;
 
-    // In this example we don't care about doing shutdown so let's it run forever.
-    // You may use the `ServerHandle` to shut it down or manage it yourself.
-    tokio::spawn(handle.stopped());
-
-    Ok(addr)
+        let server_addrs = ServerAddesses {
+            _rpc_addr: rpc_server_addr,
+            _private_rpc_addr: rpc_server_addr,
+        };
+        let handle = server.start(rpc_module);
+        let task_handle = tokio::spawn(handle.stopped());
+        (task_handle, server_addrs)
+    };
+    Ok(server_addrs)
 }

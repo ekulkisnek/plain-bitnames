@@ -15,7 +15,7 @@ use futures::{
     FutureExt as _, StreamExt as _, channel::mpsc, future::BoxFuture,
 };
 use plain_bitnames::types::{MutableBitNameData, Txid};
-use plain_bitnames_app_rpc_api::RpcClient as _;
+use plain_bitnames_app_rpc_api::wallet::RpcClient as _;
 use tokio::time::sleep;
 use tracing::Instrument as _;
 

@@ -2,40 +2,45 @@ use std::{
     borrow::Borrow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
-    sync::LazyLock,
 };
 
 use bitcoin::amount::CheckedSum as _;
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use thiserror::Error;
 use utoipa::ToSchema;
 
-pub use crate::authorization::Authorization;
-
 mod address;
-pub mod authorization;
-pub mod bitname_data;
-pub mod bitname_seq_id;
-pub mod constants;
-pub mod hashes;
-pub mod keys;
-mod paymail;
-pub mod schema;
-pub mod transaction;
-
 pub use address::Address;
+pub mod authorization;
+pub use authorization::Authorization;
+pub mod bitname_data;
 pub use bitname_data::{
     BitNameData, BitNameDataUpdates, MutableBitNameData, Update,
 };
+pub mod bitname_seq_id;
 pub use bitname_seq_id::BitNameSeqId;
+pub mod constants;
+pub mod error;
+pub use error::{
+    AmountOverflow as AmountOverflowError,
+    AmountUnderflow as AmountUnderflowError,
+    Authorization as AuthorizationError, ComputeFee as ComputeFeeError,
+    ComputeMerkleRoot as ComputeMerkleRootError, GetFee as GetFeeError,
+    WithdrawalBundle as WithdrawalBundleError,
+};
+pub mod hashes;
 pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
+pub mod keys;
 pub use keys::{
     EncryptionPubKey, VerifyingKey, XEncryptionSecretKey, XPubKey,
     XVerifyingKey,
 };
+mod paymail;
 pub use paymail::{BitNameResolution, PaymailEntry, PaymailRecipient};
+pub mod net;
+pub mod schema;
+pub mod transaction;
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
     BitcoinOutputContent, Content as OutputContent,
@@ -43,118 +48,10 @@ pub use transaction::{
     InPoint, OutPoint, OutPointKey, Output, Pointed as PointedOutput,
     SpentOutput, Transaction, TransactionData, TxData, WithdrawalOutputContent,
 };
+mod util;
+pub mod wallet;
 
 pub const THIS_SIDECHAIN: u8 = 2;
-
-#[derive(Debug, Error)]
-#[error("Bitcoin amount overflow")]
-pub struct AmountOverflowError;
-
-#[derive(Debug, Error)]
-#[error("Bitcoin amount underflow")]
-pub struct AmountUnderflowError;
-
-#[derive(Debug, Error)]
-pub enum ComputeMerkleRootError {
-    #[error("Fee computation failed for transaction {txid}: {source}")]
-    FeeComputation {
-        txid: Txid,
-        #[source]
-        source: GetFeeError,
-    },
-}
-
-#[derive(Debug, Error)]
-pub enum GetFeeError {
-    #[error("Amount overflow")]
-    AmountOverflow,
-    #[error("Amount underflow")]
-    AmountUnderflow,
-}
-
-// Helper module for serializing bitcoin::Amount with Borsh
-mod borsh_bitcoin_amount {
-    use bitcoin::Amount;
-    use borsh::{BorshDeserialize, BorshSerialize};
-
-    pub fn serialize<W: borsh::io::Write>(
-        amount: &Amount,
-        writer: &mut W,
-    ) -> borsh::io::Result<()> {
-        amount.to_sat().serialize(writer)
-    }
-
-    #[allow(dead_code)]
-    pub fn deserialize(buf: &mut &[u8]) -> borsh::io::Result<Amount> {
-        let sats = u64::deserialize(buf)?;
-        Ok(Amount::from_sat(sats))
-    }
-}
-
-/// (de)serialize as Display/FromStr for human-readable forms like json,
-/// and default serialization for non human-readable forms like bincode
-mod serde_display_fromstr_human_readable {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde_with::{DeserializeAs, DisplayFromStr, SerializeAs};
-    use std::{fmt::Display, str::FromStr};
-
-    pub fn serialize<S, T>(data: T, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        T: Serialize + Display,
-    {
-        if serializer.is_human_readable() {
-            DisplayFromStr::serialize_as(&data, serializer)
-        } else {
-            data.serialize(serializer)
-        }
-    }
-
-    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de> + FromStr,
-        <T as FromStr>::Err: Display,
-    {
-        if deserializer.is_human_readable() {
-            DisplayFromStr::deserialize_as(deserializer)
-        } else {
-            T::deserialize(deserializer)
-        }
-    }
-}
-
-/// (de)serialize as hex strings for human-readable forms like json,
-/// and default serialization for non human-readable formats like bincode
-mod serde_hexstr_human_readable {
-    use hex::{FromHex, ToHex};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S, T>(data: T, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        T: Serialize + ToHex,
-    {
-        if serializer.is_human_readable() {
-            hex::serde::serialize(data, serializer)
-        } else {
-            data.serialize(serializer)
-        }
-    }
-
-    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de> + FromHex,
-        <T as FromHex>::Error: std::fmt::Display,
-    {
-        if deserializer.is_human_readable() {
-            hex::serde::deserialize(deserializer)
-        } else {
-            T::deserialize(deserializer)
-        }
-    }
-}
 
 pub trait GetAddress {
     fn get_address(&self) -> Address;
@@ -162,17 +59,6 @@ pub trait GetAddress {
 
 pub trait GetValue {
     fn get_value(&self) -> bitcoin::Amount;
-}
-
-fn borsh_serialize_bitcoin_block_hash<W>(
-    block_hash: &bitcoin::BlockHash,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    let bytes: &[u8; 32] = block_hash.as_ref();
-    borsh::BorshSerialize::serialize(bytes, writer)
 }
 
 #[derive(
@@ -189,7 +75,7 @@ where
 pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: Option<BlockHash>,
-    #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
+    #[borsh(serialize_with = "util::borsh::serialize::bitcoin_block_hash")]
     #[schema(value_type = crate::schema::BitcoinBlockHash)]
     pub prev_main_hash: bitcoin::BlockHash,
 }
@@ -226,27 +112,6 @@ pub struct WithdrawalBundleEvent {
     pub m6id: M6id,
     pub status: WithdrawalBundleEventStatus,
 }
-
-pub static OP_DRIVECHAIN_SCRIPT: LazyLock<bitcoin::ScriptBuf> =
-    LazyLock::new(|| {
-        let mut script = bitcoin::ScriptBuf::new();
-        script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
-        script.push_instruction(bitcoin::script::Instruction::PushBytes(
-            &bitcoin::script::PushBytesBuf::from([THIS_SIDECHAIN]),
-        ));
-        script.push_opcode(bitcoin::opcodes::OP_TRUE);
-        script
-    });
-
-#[derive(Debug, Error)]
-enum WithdrawalBundleErrorInner {
-    #[error("bundle too heavy: weight `{weight}` > max weight `{max_weight}`")]
-    BundleTooHeavy { weight: u64, max_weight: u64 },
-}
-
-#[derive(Debug, Error)]
-#[error("Withdrawal bundle error")]
-pub struct WithdrawalBundleError(#[from] WithdrawalBundleErrorInner);
 
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -434,7 +299,7 @@ impl WithdrawalBundle {
         };
         if tx.weight().to_wu() > bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64
         {
-            Err(WithdrawalBundleErrorInner::BundleTooHeavy {
+            Err(error::withdrawal_bundle::Inner::BundleTooHeavy {
                 weight: tx.weight().to_wu(),
                 max_weight: bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64,
             })?;
@@ -470,7 +335,7 @@ struct CbmtNode {
     // Commitment to child nodes or leaf value
     commitment: Hash,
     // Sum of fees for child nodes or leaf value
-    #[borsh(serialize_with = "borsh_bitcoin_amount::serialize")]
+    #[borsh(serialize_with = "util::borsh::serialize::bitcoin_amount")]
     fees: bitcoin::Amount,
     // Sum of canonical tx sizes for child nodes or leaf value
     canonical_size: u64,
@@ -497,7 +362,7 @@ impl Ord for CbmtNode {
 /// Hash to get a [`CbmtNode`] inner commitment for a leaf value
 #[derive(Debug, BorshSerialize)]
 struct CbmtLeafPreCommitment<'a> {
-    #[borsh(serialize_with = "borsh_bitcoin_amount::serialize")]
+    #[borsh(serialize_with = "util::borsh::serialize::bitcoin_amount")]
     fee: bitcoin::Amount,
     canonical_size: u64,
     tx: &'a Transaction,
@@ -507,7 +372,7 @@ struct CbmtLeafPreCommitment<'a> {
 #[derive(Debug, BorshSerialize)]
 struct CbmtNodePreCommitment {
     left_commitment: Hash,
-    #[borsh(serialize_with = "borsh_bitcoin_amount::serialize")]
+    #[borsh(serialize_with = "util::borsh::serialize::bitcoin_amount")]
     fees: bitcoin::Amount,
     canonical_size: u64,
     right_commitment: Hash,
@@ -849,7 +714,7 @@ pub enum BmmResult {
 )]
 pub struct Tip {
     pub block_hash: BlockHash,
-    #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
+    #[borsh(serialize_with = "util::borsh::serialize::bitcoin_block_hash")]
     pub main_block_hash: bitcoin::BlockHash,
 }
 

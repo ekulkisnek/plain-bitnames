@@ -1,10 +1,4 @@
-[package]
-name = "plain_bitnames_types"
-authors.workspace = true
-edition.workspace = true
-license-file.workspace = true
-publish.workspace = true
-version.workspace = true
+[build-dependencies]
 
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
@@ -14,13 +8,12 @@ bitcoin = { workspace = true, features = ["serde"] }
 blake3 = { workspace = true }
 borsh = { workspace = true, features = ["derive"] }
 clap = { workspace = true, features = ["derive"], optional = true }
+const-hex = { workspace = true, features = ["serde"] }
 ed25519-bip32 = { workspace = true }
 educe = { workspace = true, features = ["Clone", "Debug"] }
 generic-array = { workspace = true }
 heed = { workspace = true, optional = true }
-hex = { workspace = true, features = ["serde"] }
 hex-literal = { workspace = true }
-libes = { workspace = true }
 merkle-cbt = { workspace = true }
 nonempty = { workspace = true, features = ["serialize"] }
 rayon = { workspace = true }
@@ -28,7 +21,6 @@ semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = {  workspace = true }
 serde_with = {  workspace = true, features = ["hex", "macros"] }
-smallvec = { workspace = true, features = ["write"] }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 typenum = { workspace = true }
@@ -38,6 +30,10 @@ x25519-dalek = { workspace = true, features = ["serde"] }
 [dependencies.ed25519-dalek]
 workspace = true
 features = ["batch", "digest", "hazmat", "serde"]
+
+[dependencies.libes]
+workspace = true
+features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
 [features]
 clap = ["dep:clap"]
@@ -49,3 +45,11 @@ workspace = true
 [lib]
 name = "plain_bitnames_types"
 path = "lib.rs"
+
+[package]
+name = "plain_bitnames_types"
+authors.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+version.workspace = true

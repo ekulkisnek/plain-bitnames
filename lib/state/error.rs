@@ -6,7 +6,7 @@ use transitive::Transitive;
 
 use crate::types::{
     AmountOverflowError, AmountUnderflowError, BitName as BitNameId, BlockHash,
-    M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError, transaction,
+    M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
 };
 
 /// Errors related to BitNames
@@ -187,7 +187,7 @@ pub enum Error {
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
     #[error(transparent)]
-    ComputeFee(#[from] transaction::ComputeFeeError),
+    ComputeFee(#[from] crate::types::ComputeFeeError),
     #[error(transparent)]
     ComputeMerkleRoot(#[from] crate::types::ComputeMerkleRootError),
     #[error(transparent)]

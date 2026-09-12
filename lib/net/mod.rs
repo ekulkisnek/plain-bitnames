@@ -4,27 +4,29 @@ use std::{
     sync::Arc,
 };
 
+pub use crate::types::net::TorProxyStatus;
 use fallible_iterator::FallibleIterator;
 use futures::{StreamExt, channel::mpsc};
 use heed::types::{SerdeBincode, Unit};
 use parking_lot::RwLock;
 use quinn::{ClientConfig, Endpoint, ServerConfig};
-use serde::{Deserialize, Serialize};
 use sneed::{DatabaseUnique, DbError, EnvError, RwTxn, RwTxnError, UnitKey};
 use tokio_stream::StreamNotifyClose;
 use tracing::instrument;
-use utoipa::ToSchema;
 
 use crate::{
     archive::Archive,
     state::State,
-    types::{AuthorizedTransaction, Network, THIS_SIDECHAIN, VERSION, Version},
+    types::{
+        AuthorizedTransaction, Network, THIS_SIDECHAIN, VERSION, Version,
+        net::{Peer, PeerConnectionStatus},
+    },
+    util::ErrorChain,
 };
 
 pub mod error;
-mod peer;
-
 pub use error::Error;
+mod peer;
 pub(crate) use peer::error::mailbox::Error as PeerConnectionMailboxError;
 use peer::{
     Connection, ConnectionContext as PeerConnectionCtxt,
@@ -32,8 +34,8 @@ use peer::{
 };
 pub use peer::{
     ConnectionError as PeerConnectionError, Info as PeerConnectionInfo,
-    InternalMessage as PeerConnectionMessage, Peer, PeerConnectionStatus,
-    PeerStateId, Request as PeerRequest, ResponseMessage as PeerResponse,
+    InternalMessage as PeerConnectionMessage, PeerStateId,
+    Request as PeerRequest, ResponseMessage as PeerResponse,
     message as peer_message,
 };
 
@@ -141,22 +143,6 @@ pub fn make_server_endpoint(
 // None indicates that the stream has ended
 pub type PeerInfoRx =
     mpsc::UnboundedReceiver<(SocketAddr, Option<PeerConnectionInfo>)>;
-
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema,
-)]
-pub struct TorProxyStatus {
-    pub tor_proxy_mode: bool,
-    /// Connected loopback peers, which are the only peers permitted in Tor
-    /// proxy mode.
-    pub connected_tunnel_peers: u32,
-}
-
-impl TorProxyStatus {
-    pub fn allows_transaction_submission(self) -> bool {
-        !self.tor_proxy_mode || self.connected_tunnel_peers > 0
-    }
-}
 
 const SIGNET_SEED_NODE_ADDRS: &[SocketAddr] = {
     const SIGNET_MINING_SERVER: SocketAddr = SocketAddr::new(
@@ -294,7 +280,7 @@ fn queue_transaction_to_peers(
 pub struct Net {
     pub server: Endpoint,
     archive: Archive,
-    network: Network,
+    magic_bytes: peer_message::MagicBytes,
     state: State,
     active_peers: Arc<RwLock<HashMap<SocketAddr, PeerConnectionHandle>>>,
     // None indicates that the stream has ended
@@ -407,7 +393,7 @@ impl Net {
         let connection_ctxt = PeerConnectionCtxt {
             env,
             archive: self.archive.clone(),
-            network: self.network,
+            magic_bytes: self.magic_bytes,
             state: self.state.clone(),
         };
         let (connection_handle, info_rx) =
@@ -440,9 +426,11 @@ impl Net {
             .map_err(|err| DbError::from(err).into())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &sneed::Env<heed::WithoutTls>,
         archive: Archive,
+        magic_bytes_override: Option<peer_message::MagicBytes>,
         network: Network,
         state: State,
         bind_addr: SocketAddr,
@@ -476,11 +464,13 @@ impl Net {
             version.put(&mut rwtxn, &(), &*VERSION)?;
         }
         rwtxn.commit()?;
+        let magic_bytes = magic_bytes_override
+            .unwrap_or_else(|| peer_message::magic_bytes(network));
         let (peer_info_tx, peer_info_rx) = mpsc::unbounded();
         let net = Net {
             server,
             archive,
-            network,
+            magic_bytes,
             state,
             active_peers,
             peer_info_tx,
@@ -565,7 +555,7 @@ impl Net {
                         remote_address,
                     }
                 })?;
-                Connection::new(raw_conn, self.network)
+                Connection::new(raw_conn, self.magic_bytes)
             }
             None => {
                 tracing::debug!("server endpoint closed");
@@ -607,7 +597,7 @@ impl Net {
         let connection_ctxt = PeerConnectionCtxt {
             env,
             archive: self.archive.clone(),
-            network: self.network,
+            magic_bytes: self.magic_bytes,
             state: self.state.clone(),
         };
         let (connection_handle, info_rx) =
@@ -641,7 +631,7 @@ impl Net {
         let active_peers_read = self.active_peers.read();
         let Some(peer_connection_handle) = active_peers_read.get(&addr) else {
             let err = Error::MissingPeerConnection(addr);
-            tracing::warn!("{:#}", anyhow::Error::from(err));
+            tracing::warn!("{:#}", ErrorChain::new(&err));
             return false;
         };
 
@@ -663,7 +653,7 @@ impl Net {
     pub fn push_tx(
         &self,
         exclude: HashSet<SocketAddr>,
-        tx: AuthorizedTransaction,
+        tx: &AuthorizedTransaction,
     ) -> usize {
         let active_peers = self.active_peers.read();
         queue_transaction_to_peers(
@@ -671,7 +661,7 @@ impl Net {
             self.tor_proxy_mode,
             self.tor_proxy_peer,
             &exclude,
-            &tx,
+            tx,
         )
     }
 }

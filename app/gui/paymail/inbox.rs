@@ -34,7 +34,7 @@ impl Inbox {
         let hash = &hash[0..8];
         ui.monospace(kind.to_string());
         ui.monospace(format!("{hash}:{vout}",));
-        ui.monospace(hex::encode(memo));
+        ui.monospace(const_hex::encode(memo));
     }
 
     fn show_inbox(
@@ -80,7 +80,7 @@ impl Inbox {
     ) {
         ui.heading(outpoint.to_string());
         ui.separator();
-        ui.monospace_selectable_multiline(hex::encode(memo));
+        ui.monospace_selectable_multiline(const_hex::encode(memo));
     }
 
     pub fn show(
@@ -91,13 +91,13 @@ impl Inbox {
     ) {
         egui::Panel::left("Inbox")
             //.exact_width(250.)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let () = self
                     .show_inbox(app, settings, ui)
                     .unwrap_or_else(|err| Self::show_error(ui, &err));
             });
         if let Some(selected) = &self.selected {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let () = Self::show_selected(ui, selected);
             });
         }

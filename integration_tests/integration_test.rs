@@ -9,9 +9,10 @@ use bip300301_enforcer_integration_tests::{
 };
 use bip300301_enforcer_lib::bins::CommandExt;
 use futures::{FutureExt, channel::mpsc::UnboundedSender, future::BoxFuture};
-use plain_bitnames_app_rpc_api::RpcClient as _;
+use plain_bitnames_app_rpc_api::node::RpcClient as _;
 
 use crate::{
+    block_template::block_template_trial,
     ibd::ibd_trial,
     register_bitname::register_bitname_trial,
     setup::{Init, PostSetup},
@@ -56,7 +57,7 @@ pub async fn deposit_withdraw_roundtrip_task(
     tracing::info!("Deposited to sidechain successfully");
     // Wait for mempool to catch up before attempting second deposit
     tracing::debug!("Waiting for wallet sync...");
-    let () = wait_for_wallet_sync().await?;
+    let () = wait_for_wallet_sync(post_setup).await?;
     tracing::info!("Attempting second deposit");
     let () = deposit(
         post_setup,
@@ -163,6 +164,11 @@ pub fn tests(
     failure_collector: TestFailureCollector,
 ) -> Vec<AsyncTrial<BoxFuture<'static, anyhow::Result<()>>>> {
     vec![
+        block_template_trial(
+            bin_paths.clone(),
+            file_registry.clone(),
+            failure_collector.clone(),
+        ),
         deposit_withdraw_roundtrip_trial(
             bin_paths.clone(),
             file_registry.clone(),

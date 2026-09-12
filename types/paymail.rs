@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(entry["value_sats"], 1);
         assert_eq!(entry["output"]["memo"], "aabb");
         assert_eq!(entry["recipients"][0]["required_fee_sats"], 1_000);
-        assert_eq!(entry["recipients"][0]["bitname"], hex::encode([1; 32]));
+        assert_eq!(entry["recipients"][0]["bitname"], "01".repeat(32));
         assert!(entry["outpoint"].get("Regular").is_some());
     }
 
